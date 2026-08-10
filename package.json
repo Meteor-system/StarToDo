@@ -1,10 +1,11 @@
 {
-  "name": "tauri-app",
+  "name": "startodo",
   "version": "0.1.0",
-  "description": "",
+  "description": "StarToDo desktop application",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "build:notification-host": "dotnet publish tools/notification-host/StarToDo.NotificationHost.csproj -c Release -r win-x64 --self-contained true -o tools/notification-host/publish",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -14,6 +15,7 @@
   "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-deep-link": "^2",
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {

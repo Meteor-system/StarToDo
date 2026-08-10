@@ -11,3 +11,4 @@ vite.config.ts.timestamp-*
 /src-tauri/target
 /tools/**/bin
 /tools/**/obj
+/tools/**/publish
