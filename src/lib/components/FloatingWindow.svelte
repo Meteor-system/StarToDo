@@ -32,6 +32,7 @@
     pomodoroSnapshotAccepted
   } from '$lib/floating-coordinator';
   import {
+    abandonFloatingResetReconciliation,
     acceptFloatingPreferencesRead,
     acceptFloatingReconciliation,
     acceptFloatingResetFailure,
@@ -345,9 +346,11 @@
           const next = await getFloatingWindowPreferences();
           if (!disposed) sizeSync = acceptFloatingResetReconciliation(sizeSync, resetRequest, next);
         } catch {
-          if (sizeSync.resetDesired?.generation === resetRequest.generation) {
-            sizeSync = { ...sizeSync, resetDesired: null };
-          }
+          sizeSync = abandonFloatingResetReconciliation(
+            sizeSync,
+            resetRequest,
+            floatingSizeMode(display.mode)
+          );
         }
       } finally {
         if (!disposed) void flushSizeSync();

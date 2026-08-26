@@ -236,6 +236,23 @@ Focused round-2 aggregate GREEN:
 - `npm run check`: 0 errors, 0 warnings.
 - Active/failure/deadline/idle focused Playwright: 5/5 passed.
 
+## Fix round 3/5 evidence
+
+RED:
+
+- `npx vitest run src/lib/floating-size-sync.test.ts`
+- 17 tests: 3 failed, 14 passed.
+- Exact failures: ambiguous reset reconciliation returned obsolete expanded generation 1 instead of reset generation 2; `abandonFloatingResetReconciliation` did not exist; and `nextFloatingSizeRequest` emitted obsolete desired generation 1 while global generation was 2.
+
+GREEN:
+
+- Focused size coordinator: 17/17 passed.
+- `nextFloatingSizeRequest` rejects any desired request whose generation is not globally current.
+- Current reset reconciliation rebases desired to `{ mode: preferences.displayMode, generation: resetRequest.generation }` without advancing `appliedGeneration`. The drain issues exactly one current presentation set; if that set fails, existing failed-state suppression prevents spin and a later explicit event can allocate a retry.
+- If the preferences read after reset failure also fails, pure `abandonFloatingResetReconciliation` clears only the current reset token and rebases desired to the current UI display mode at reset generation, again without applied success. The component uses this helper instead of direct state mutation.
+- Reset success and reset reconciliation generics require `{ displayMode: FloatingSizeMode }`; the intersection cast was removed.
+- Existing newer mode/reset supersession tests remain green.
+
 ## Remaining Minors
 
 - Browser preview still has no task fixture with six visible tasks, so actual expanded-list overflow and the remainder label are covered structurally (`slice(0, 5)`, conditional remainder, local `overflow:auto`) rather than by a populated E2E.
@@ -249,7 +266,7 @@ Final post-code evidence:
 - Direct focused reducer/coordinator files after model-gap fixes: 3 files, 23/23 tests passed.
 - `npm run check`: 0 errors, 0 warnings.
 - Direct focused Playwright (`active capsule|expanded idle companion`): 3/3 passed.
-- Full `npm run test:unit` after reset acceptance follow-up: 9 files, 81/81 passed.
+- Full `npm run test:unit` after round 3: 9 files, 85/85 passed.
 - Full Playwright after round 2: 24/24 passed.
 - `git diff --check`: exit 0; only Git line-ending notices.
 - Changed authorized source/test/report files: strict UTF-8 and nonempty.

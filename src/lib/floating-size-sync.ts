@@ -75,7 +75,7 @@ export function beginFloatingResetRequest<T>(
   return { ...state, resetInFlight: request };
 }
 
-export function acceptFloatingResetSuccess<T>(
+export function acceptFloatingResetSuccess<T extends { displayMode: FloatingSizeMode }>(
   state: FloatingSizeSyncState<T>,
   request: FloatingResetRequest,
   preferences: T
@@ -86,7 +86,7 @@ export function acceptFloatingResetSuccess<T>(
     resetInFlight: state.resetInFlight?.generation === request.generation ? null : state.resetInFlight,
     resetDesired: current ? null : state.resetDesired,
     desired: current
-      ? { mode: (preferences as T & { displayMode: FloatingSizeMode }).displayMode, generation: request.generation }
+      ? { mode: preferences.displayMode, generation: request.generation }
       : state.desired,
     preferences: current ? preferences : state.preferences,
     appliedGeneration: current ? request.generation : state.appliedGeneration
@@ -103,13 +103,35 @@ export function acceptFloatingResetFailure<T>(
   };
 }
 
-export function acceptFloatingResetReconciliation<T>(
+export function acceptFloatingResetReconciliation<T extends { displayMode: FloatingSizeMode }>(
   state: FloatingSizeSyncState<T>,
   request: FloatingResetRequest,
   preferences: T
 ): FloatingSizeSyncState<T> {
   const current = state.generation === request.generation && state.resetDesired?.generation === request.generation;
-  return current ? { ...state, preferences, resetDesired: null } : state;
+  return current
+    ? {
+        ...state,
+        preferences,
+        resetDesired: null,
+        desired: { mode: preferences.displayMode, generation: request.generation }
+      }
+    : state;
+}
+
+export function abandonFloatingResetReconciliation<T>(
+  state: FloatingSizeSyncState<T>,
+  request: FloatingResetRequest,
+  mode: FloatingSizeMode
+): FloatingSizeSyncState<T> {
+  const current = state.generation === request.generation && state.resetDesired?.generation === request.generation;
+  return current
+    ? {
+        ...state,
+        resetDesired: null,
+        desired: { mode, generation: request.generation }
+      }
+    : state;
 }
 
 export function acceptFloatingPreferencesRead<T extends { displayMode: FloatingSizeMode }>(
@@ -150,7 +172,8 @@ export function nextFloatingSizeRequest<T>(
     state.inFlight !== null ||
     state.resetDesired !== null ||
     state.resetInFlight !== null ||
-    state.desired === null
+    state.desired === null ||
+    state.desired.generation !== state.generation
   ) return null;
   if (state.failed?.generation === state.desired.generation) return null;
   if (state.appliedGeneration >= state.desired.generation) return null;

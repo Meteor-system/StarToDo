@@ -4,6 +4,7 @@ import {
   acceptFloatingPreferencesRead,
   acceptFloatingReconciliation,
   acceptFloatingSizeFailure,
+  abandonFloatingResetReconciliation,
   acceptFloatingResetFailure,
   acceptFloatingResetReconciliation,
   acceptFloatingResetSuccess,
@@ -154,6 +155,50 @@ describe('floating size sync coordination', () => {
     sync = acceptFloatingReconciliation(sync, setRequest, prefs('expanded', 380, true));
 
     expect(sync.preferences).toEqual(prefs('capsule', 340, true));
+  });
+
+  it('rebases ambiguous reset reconciliation before issuing one current presentation retry', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingSize(sync, 'expanded');
+    const oldSet = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, oldSet);
+    sync = acceptFloatingSizeFailure(sync, oldSet);
+    sync = requestFloatingReset(sync);
+    const reset = nextFloatingResetRequest(sync)!;
+    sync = beginFloatingResetRequest(sync, reset);
+    sync = acceptFloatingResetFailure(sync, reset);
+    sync = acceptFloatingResetReconciliation(sync, reset, prefs('expanded', 380, false));
+
+    const presentation = nextFloatingSizeRequest(sync)!;
+    expect(presentation).toEqual({ mode: 'expanded', generation: reset.generation });
+    sync = beginFloatingSizeRequest(sync, presentation);
+    sync = acceptFloatingSizeFailure(sync, presentation);
+    expect(nextFloatingSizeRequest(sync)).toBeNull();
+  });
+
+  it('rebases failed reset reconciliation to the current UI mode without applied success', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingReset(sync);
+    const reset = nextFloatingResetRequest(sync)!;
+    sync = beginFloatingResetRequest(sync, reset);
+    sync = acceptFloatingResetFailure(sync, reset);
+    sync = abandonFloatingResetReconciliation(sync, reset, 'expanded');
+
+    expect(sync.desired).toEqual({ mode: 'expanded', generation: reset.generation });
+    expect(sync.appliedGeneration).toBeLessThan(reset.generation);
+    expect(nextFloatingSizeRequest(sync)).toEqual(sync.desired);
+  });
+
+  it('never emits an obsolete desired generation', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingSize(sync, 'expanded');
+    const oldSet = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, oldSet);
+    sync = acceptFloatingSizeFailure(sync, oldSet);
+    sync = requestFloatingReset(sync);
+    sync = { ...sync, resetDesired: null };
+
+    expect(nextFloatingSizeRequest(sync)).toBeNull();
   });
 
   it('keeps a newer reset pending when an obsolete reset fails', () => {
