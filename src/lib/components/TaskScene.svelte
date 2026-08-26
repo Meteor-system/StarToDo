@@ -4,6 +4,7 @@
   import ProjectSidebar from '$lib/components/ProjectSidebar.svelte';
   import TaskCanvas from '$lib/components/TaskCanvas.svelte';
   import TaskComposer from '$lib/components/TaskComposer.svelte';
+  import TaskDetailsDrawer from '$lib/components/TaskDetailsDrawer.svelte';
   import WeekPlanner from '$lib/components/WeekPlanner.svelte';
   import { readPreference, writePreference } from '$lib/preferences';
   import {
@@ -58,6 +59,11 @@
   } from '$lib/tasks';
 
   type TaskDrawer = 'create' | 'filters' | 'projects' | 'planner' | 'trash' | null;
+
+  interface CompletionFeedback {
+    id: number;
+    title: string;
+  }
 
   interface Props {
     tauriAvailable: boolean;
@@ -133,6 +139,10 @@
   let statusFilter = $state<StatusFilter>(storedFilter(STATUS_FILTER_STORAGE_KEY, ['all', 'active', 'completed'], 'all'));
   let executionView = $state<ExecutionView>(storedExecutionView());
   let activeDrawer = $state<TaskDrawer>(null);
+  let selectedTaskId = $state<number | null>(null);
+  let completionFeedback = $state<CompletionFeedback | null>(null);
+  let completionFeedbackSequence = 0;
+  let completionFeedbackTimer: ReturnType<typeof window.setTimeout> | undefined;
   let plannerWeekStart = $state(weekStartLocalDate(todayLocalDate()));
   let nowUnixMs = $state(Date.now());
   let searchQuery = $state('');
@@ -171,6 +181,22 @@
   let selectedProjectIsArchived = $derived(
     selectedProjectRecord !== null && selectedProjectRecord.archivedAtUnixMs !== null
   );
+  let selectedTask = $derived(
+    tasks.find((task) => task.id === selectedTaskId) ?? null
+  );
+
+  $effect(() => {
+    if (selectedTaskId !== null && selectedTask === null) selectedTaskId = null;
+  });
+
+  function showCompletionFeedback(task: Task): void {
+    if (completionFeedbackTimer !== undefined) window.clearTimeout(completionFeedbackTimer);
+    completionFeedback = { id: ++completionFeedbackSequence, title: task.title };
+    completionFeedbackTimer = window.setTimeout(() => {
+      completionFeedback = null;
+      completionFeedbackTimer = undefined;
+    }, 900);
+  }
 
   function markMutation(): void {
     dataRevision += 1;
@@ -607,10 +633,11 @@
 
   async function handleChanged(task: Task, kind: TaskChangeKind, result: TaskMutationWithToken): Promise<boolean> {
     if (!isCurrentOperation(result.operationToken)) return false;
-    const taskIndex = visibleTasks.findIndex((candidate) => candidate.id === task.id);
+    const focusCandidates = kind === 'complete' ? activeTasks : visibleTasks;
+    const taskIndex = focusCandidates.findIndex((candidate) => candidate.id === task.id);
     const adjacentTaskId = taskIndex < 0
       ? undefined
-      : visibleTasks[taskIndex + 1]?.id ?? visibleTasks[taskIndex - 1]?.id;
+      : focusCandidates[taskIndex + 1]?.id ?? focusCandidates[taskIndex - 1]?.id;
     upsert(task);
     if (kind === 'complete' && result.nextTask) upsert(result.nextTask);
     reportMutationWarning(result.operationToken, result.reminderWarning, task.id);
@@ -621,8 +648,10 @@
         result.nextTask.id,
       );
     }
-    if (kind === 'complete') onPomodoroTasksChanged?.(task.id);
-    else if (kind === 'restore' || kind === 'update') onPomodoroTasksChanged?.();
+    if (kind === 'complete') {
+      onPomodoroTasksChanged?.(task.id);
+      showCompletionFeedback(task);
+    } else if (kind === 'restore' || kind === 'update') onPomodoroTasksChanged?.();
     announcement = kind === 'complete'
       ? result.nextTask
         ? `已完成任务：${task.title}；已创建下一次：${result.nextTask.title}`
@@ -783,6 +812,10 @@
       window.clearTimeout(activationRetryTimer);
       activationRetryTimer = undefined;
     }
+    if (typeof window !== 'undefined' && completionFeedbackTimer !== undefined) {
+      window.clearTimeout(completionFeedbackTimer);
+      completionFeedbackTimer = undefined;
+    }
   });
 
   $effect(() => {
@@ -828,9 +861,19 @@
   </section>
   <p class="sr-only" aria-live="polite">{announcement}</p>
   {#if !initialized}<p class="muted">正在初始化任务场景…</p>{:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>{:else if loading}<p class="muted">正在读取任务…</p>{:else if tauriAvailable}
-    <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={() => undefined} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
+    <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={(taskId) => { selectedTaskId = taskId; }} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
   {/if}
+  {#key completionFeedback?.id}
+    {#if completionFeedback}
+      <div class="completion-feedback" role="status" aria-live="polite">
+        <span aria-hidden="true">✦</span>
+        <span>已完成：{completionFeedback.title}</span>
+      </div>
+    {/if}
+  {/key}
 </section>
+
+<TaskDetailsDrawer open={selectedTask !== null} task={selectedTask} {projects} onClose={() => { selectedTaskId = null; }} onUpdate={handleUpdate} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />
 
 <ContextDrawer open={activeDrawer === 'create'} drawerId="create-task-drawer" title="详细新建" onClose={closeTaskDrawer}>
   <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
@@ -851,7 +894,7 @@
 <ContextDrawer open={activeDrawer === 'trash'} drawerId="trash-drawer" title="回收站" onClose={closeTaskDrawer}>{#if trashLoadError}<div class="load-error" role="alert"><span>回收站未能加载：{trashLoadError}</span><button onclick={() => void loadTrash()} disabled={trashLoading}>{trashLoading ? '重试中…' : '重试'}</button></div>{:else if trashLoading}<p class="muted">正在读取回收站…</p>{:else}<TaskCanvas activeTasks={[]} completedTasks={[]} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} trashMode={true} onOpenDetails={() => undefined} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />{/if}</ContextDrawer>
 
 <style>
-  .task-scene { height:100%; min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); container-type:inline-size; }
+  .task-scene { position:relative; height:100%; min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); container-type:inline-size; }
   .scene-header { display:grid; min-width:0; }
   .scene-heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }
   .scene-tools { display:flex; align-items:center; gap:8px; padding:14px 0; min-width:0; }
@@ -867,5 +910,9 @@
   .filters { display:grid; gap:14px; padding-top:16px; } .execution-views { display:flex; flex-wrap:wrap; gap:5px; } .execution-views button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 8px; color:var(--muted); background:transparent; font-size:12px; } .execution-views button.active { color:var(--text); border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); } .filters label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; } .filters select { border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text); background:var(--surface); }
   .error { margin:0; color:var(--danger); font-size:12px; line-height:1.5; } .field-note { margin:0; color:var(--muted); font-size:11px; } .load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:14px; color:var(--danger); font-size:12px; } .load-error button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:5px 8px; color:var(--text-soft); background:transparent; }
   .quiet { border:0; border-radius:var(--radius-sm); padding:5px 7px; color:var(--muted); background:transparent; font-size:11px; } .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+  .completion-feedback { position:absolute; right:24px; bottom:24px; z-index:15; display:flex; align-items:center; gap:8px; max-width:min(360px,calc(100% - 48px)); padding:9px 12px; border:1px solid color-mix(in srgb, var(--success) 55%, var(--line)); border-radius:999px; color:var(--success); background:color-mix(in srgb, var(--surface-raised) 92%, transparent); box-shadow:var(--shadow-overlay); pointer-events:none; animation:completion-star .4s ease-out both; }
+  .completion-feedback span:first-child { font-size:19px; }
+  @keyframes completion-star { from { opacity:0; transform:translateY(6px) scale(.94); } to { opacity:1; transform:translateY(0) scale(1); } }
+  @media (prefers-reduced-motion: reduce) { .completion-feedback { animation-name:completion-star-reduced; } @keyframes completion-star-reduced { from { opacity:0; } to { opacity:1; } } }
   @container (max-width:640px) { .scene-tools { flex-wrap:wrap; } .search-input { flex-basis:100%; order:-1; } .scene-tools button { flex:1; } }
 </style>
