@@ -34,25 +34,18 @@
     claimPendingReminderWarnings,
     reconcileReminders,
     takePendingFloatingIntent,
-    toggleFloatingWindow,
     type PendingActivation,
     type ReminderReport,
     type ReminderWarningContext,
     type ReminderWarningEvent
   } from '$lib/tasks';
+  import { toggleFloatingWindow, type WindowPreferences } from '$lib/windowing';
 
   type WindowMode = 'normal' | 'maximized' | 'fullscreen';
   type AppView = 'tasks' | 'focus';
   type JsonPrimitive = string | number | boolean | null;
   type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
   type JsonRecord = { [key: string]: JsonValue };
-  interface WindowPreferences {
-    layout: 'adaptive';
-    maximized: boolean;
-    normalBounds: { x: number | null; y: number | null; width: number; height: number };
-    alwaysOnTop: boolean;
-    lastImmersive: boolean;
-  }
   interface DisplayReminderWarning extends ReminderWarningContext { id: string; }
   interface UiReadyRegistration {
     runtimeSnapshot: JsonRecord;

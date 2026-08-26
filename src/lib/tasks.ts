@@ -1,4 +1,4 @@
-﻿import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 
 export type Priority = 'none' | 'low' | 'medium' | 'high';
 export type RecurrenceKind = 'none' | 'daily' | 'weekly';
@@ -142,6 +142,11 @@ export interface ReminderReport {
   missedTaskIds: number[];
   capability: 'osScheduled' | 'sendNow';
   warning: string | null;
+}
+
+export interface FloatingIntent {
+  view: 'tasks' | 'focus';
+  taskId: number | null;
 }
 
 export interface TaskDraft {
@@ -424,3 +429,8 @@ export const acknowledgeReminderWarnings = (listenerToken: number, ids: number[]
   invoke<void>('acknowledge_reminder_warnings', { listenerToken, ids });
 export const parseTaskDrafts = (text: string, todayLocal: string): Promise<TaskDraft[]> =>
   invoke<TaskDraft[]>('parse_task_drafts', { text, todayLocal });
+export const openTaskFromFloating = (taskId: number): Promise<void> =>
+  invoke<void>('open_task_from_floating', { taskId });
+export const openFocusFromFloating = (): Promise<void> => invoke<void>('open_focus_from_floating');
+export const takePendingFloatingIntent = (): Promise<FloatingIntent | null> =>
+  invoke<FloatingIntent | null>('take_pending_floating_intent');

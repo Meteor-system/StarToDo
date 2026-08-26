@@ -89,6 +89,7 @@ struct AppState {
     scheduled_reminder_retry_at_unix_ms: AtomicI64,
     pomodoro_wake_generation: AtomicU64,
     pomodoro_operation_lock: Mutex<()>,
+    immersive_restore_state: Mutex<Option<ImmersiveRestoreState>>,
     pending_floating_intent: Mutex<Option<FloatingIntent>>,
 }
 
@@ -243,6 +244,36 @@ struct WindowPreferences {
     normal_bounds: WindowBounds,
     always_on_top: bool,
     last_immersive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImmersiveRestoreState {
+    maximized: bool,
+    normal_bounds: WindowBounds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowRestoreTarget {
+    Maximized,
+    Normal(WindowBounds),
+}
+
+impl ImmersiveRestoreState {
+    fn restore_target(&self) -> WindowRestoreTarget {
+        if self.maximized {
+            WindowRestoreTarget::Maximized
+        } else {
+            WindowRestoreTarget::Normal(self.normal_bounds.clone())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowState {
+    maximized: bool,
+    fullscreen: bool,
+    normal_bounds: WindowBounds,
 }
 
 impl Default for WindowPreferences {
@@ -3032,33 +3063,111 @@ fn save_window_preferences(app: AppHandle, preferences: WindowPreferences) -> Re
     save_window_preferences_to_disk(&app, &preferences)
 }
 
-#[tauri::command]
-fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+fn current_window_state(app: &AppHandle) -> Result<WindowState, String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window is not available".to_string())?;
-    let mut preferences = read_window_preferences(&app);
-    match mode.as_str() {
-        "normal" => {
-            window.unmaximize().map_err(string_error)?;
-            preferences.maximized = false;
-            preferences.last_immersive = false;
-            save_window_preferences_to_disk(&app, &preferences)
+    let maximized = window.is_maximized().map_err(string_error)?;
+    let fullscreen = window.is_fullscreen().map_err(string_error)?;
+    let mut preferences = read_window_preferences(app);
+    if !maximized && !fullscreen {
+        if let Ok(size) = window.inner_size() {
+            let position = window.outer_position().ok();
+            preferences.normal_bounds = WindowBounds {
+                x: position.as_ref().map(|p| p.x),
+                y: position.as_ref().map(|p| p.y),
+                width: size.width,
+                height: size.height,
+            };
         }
-        "minimized" => window.minimize().map_err(string_error),
-        "maximized" => {
-            window.maximize().map_err(string_error)?;
-            preferences.maximized = true;
-            preferences.last_immersive = false;
-            save_window_preferences_to_disk(&app, &preferences)
-        }
-        "fullscreen" => {
-            window.set_fullscreen(true).map_err(string_error)?;
-            preferences.last_immersive = true;
-            save_window_preferences_to_disk(&app, &preferences)
-        }
-        _ => Err("window mode must be normal, minimized, maximized, or fullscreen".to_string()),
     }
+    Ok(WindowState {
+        maximized,
+        fullscreen,
+        normal_bounds: preferences.normal_bounds,
+    })
+}
+
+#[tauri::command]
+fn get_window_state(app: AppHandle) -> Result<WindowState, String> {
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn enter_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    let preferences = read_window_preferences(&app);
+    let maximized = window.is_maximized().map_err(string_error)?;
+    let fullscreen = window.is_fullscreen().map_err(string_error)?;
+    if fullscreen {
+        return current_window_state(&app);
+    }
+    let restore = ImmersiveRestoreState {
+        maximized,
+        normal_bounds: preferences.normal_bounds.clone(),
+    };
+    window.set_fullscreen(true).map_err(string_error)?;
+    *state.immersive_restore_state.lock().map_err(string_error)? = Some(restore);
+    let mut updated = preferences;
+    updated.last_immersive = true;
+    save_window_preferences_to_disk(&app, &updated)?;
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn exit_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window.set_fullscreen(false).map_err(string_error)?;
+    let mut preferences = read_window_preferences(&app);
+    let restore = state
+        .immersive_restore_state
+        .lock()
+        .map_err(string_error)?
+        .take()
+        .unwrap_or(ImmersiveRestoreState {
+            maximized: preferences.maximized,
+            normal_bounds: preferences.normal_bounds.clone(),
+        });
+    match restore.restore_target() {
+        WindowRestoreTarget::Maximized => window.maximize().map_err(string_error)?,
+        WindowRestoreTarget::Normal(bounds) => {
+            window.unmaximize().map_err(string_error)?;
+            window
+                .set_size(LogicalSize::new(bounds.width, bounds.height))
+                .map_err(string_error)?;
+            if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
+                window
+                    .set_position(LogicalPosition::new(x, y))
+                    .map_err(string_error)?;
+            }
+            preferences.normal_bounds = bounds;
+        }
+    }
+    preferences.maximized = restore.maximized;
+    preferences.last_immersive = false;
+    save_window_preferences_to_disk(&app, &preferences)?;
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn set_main_window_maximized(app: AppHandle, maximized: bool) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    if maximized {
+        window.maximize().map_err(string_error)?;
+    } else {
+        window.unmaximize().map_err(string_error)?;
+    }
+    let mut preferences = read_window_preferences(&app);
+    preferences.maximized = maximized;
+    preferences.last_immersive = false;
+    save_window_preferences_to_disk(&app, &preferences)?;
+    current_window_state(&app)
 }
 
 #[tauri::command]
@@ -3227,6 +3336,7 @@ pub fn run() {
                 scheduled_reminder_retry_at_unix_ms: AtomicI64::new(0),
                 pomodoro_wake_generation: AtomicU64::new(0),
                 pomodoro_operation_lock: Mutex::new(()),
+                immersive_restore_state: Mutex::new(None),
                 pending_floating_intent: Mutex::new(None),
             });
             install_activation_listener(app);
@@ -3298,7 +3408,10 @@ pub fn run() {
             cancel_test_notification,
             hide_to_tray,
             release_ui,
-            set_window_mode,
+            get_window_state,
+            enter_immersive_mode,
+            exit_immersive_mode,
+            set_main_window_maximized,
             set_always_on_top,
             get_floating_window_preferences,
             show_floating_window,
@@ -3324,6 +3437,33 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immersive_restore_prefers_maximized() {
+        let restore = ImmersiveRestoreState {
+            maximized: true,
+            normal_bounds: WindowBounds::default(),
+        };
+        assert_eq!(restore.restore_target(), WindowRestoreTarget::Maximized);
+    }
+
+    #[test]
+    fn immersive_restore_uses_normal_bounds() {
+        let bounds = WindowBounds {
+            x: Some(30),
+            y: Some(40),
+            width: 900,
+            height: 700,
+        };
+        let restore = ImmersiveRestoreState {
+            maximized: false,
+            normal_bounds: bounds.clone(),
+        };
+        assert_eq!(
+            restore.restore_target(),
+            WindowRestoreTarget::Normal(bounds)
+        );
+    }
 
     #[test]
     fn compact_window_preferences_migrate_to_adaptive() {
