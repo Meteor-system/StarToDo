@@ -17,7 +17,7 @@
 - [x] The UI remains usable at 520 x 420. Observed evidence: Chromium E2E at 520 x 420 kept task and focus document width/height at 520 x 420, opened the planner drawer, exercised its visible local tabpanel, restored settings-trigger focus after Escape, and displayed the focus timer with no browser errors.
 - [x] Normal size and position survive hide-to-tray, show, UI release/rebuild, and process restart. Observed isolated native evidence: exact inner 960 x 680 at x=260,y=260 survived hide/show, Release UI/WebView rebuild, and a full process restart; Release retained original PID 139084, second PID 137180 exited 0, and rebuilt bounds remained exact.
 - [ ] Legacy compact preferences migrate without recreating compact mode. Blocker: Rust tests cover migration, but no isolated native legacy preference directory was launched.
-- [ ] Always-on-top still persists and applies. Blocker: requires native window and persisted preference mutation.
+- [x] Always-on-top still persists and applies. Observed native GREEN on binary `C2FB676…`: setting true produced persisted alwaysOnTop=true and actual native is_always_on_top=true in PID 135584; forced process restart to PID 128980 preserved both true. Controller then set false and verified actual state and preferences both false for cleanup.
 
 ## Focus and immersive mode
 
@@ -26,8 +26,8 @@
 - [x] “保持窗口模式” starts focus without fullscreen. Observed isolated native evidence: the action persisted disabled and started a running Pomodoro with fullscreen=false.
 - [x] The diagnostics preference can restore “下次询问”. Observed isolated native evidence: diagnostics changed the persisted preference from disabled back to unset.
 - [x] Escape exits fullscreen. Observed isolated native evidence: Escape exited Windows true fullscreen and restored the exact prior normal bounds.
-- [ ] The visible exit action exits fullscreen. Blocker: browser E2E proves visual fallback behavior only.
-- [ ] Exiting restores the exact prior maximized or normal state. Partial native PASS: Escape restored exact prior normal bounds. Blocker: restoration of a prior maximized state was not supplied, so every clause is not proved.
+- [x] The visible exit action exits fullscreen. Observed native GREEN on binary `C2FB676…`: entered state was maximized=true/fullscreen=true/normal 960 x 680; activating visible `退出沉浸` returned UI display state off and native state maximized=true/fullscreen=false/normal 960 x 680.
+- [x] Exiting restores the exact prior maximized or normal state. Observed native evidence covers both branches: earlier Escape restored exact prior normal bounds, while visible `退出沉浸` restored maximized=true from true fullscreen and retained normal 960 x 680.
 - [ ] A fullscreen command failure uses in-window immersive fallback without changing Pomodoro state. Blocker: browser runtime absence selects visual fallback before `enterImmersiveMode` is invoked, so current E2E does not exercise a rejected `enter_immersive_mode` command or compare a live Pomodoro snapshot before/after; no isolated native failure injection was available.
 - [x] Pause, resume, skip, reset, notification warning, and SQLite restoration still work. Observed isolated native evidence: start, pause, resume, skip, restart, and reset all mutated isolated SQLite and returned explicit absent-host warnings; running session id 5 survived a forced full process restart and was then reset.
 
