@@ -184,6 +184,31 @@ test('active capsule preserves logical focus while expanding', async ({ page }) 
   await expect(page.getByRole('button', { name: '隐藏悬浮窗' })).toBeFocused();
 });
 
+test('failed logical focus restoration arms bounded collapse', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-25T12:00:00Z') });
+  await installActiveFloatingTauriMock(page);
+  await page.addInitScript(() => {
+    window.addEventListener('DOMContentLoaded', () => {
+      new MutationObserver(() => {
+        const region = document.querySelector<HTMLElement>('[aria-label="StarToDo 悬浮窗"]');
+        if (region?.dataset.displayMode !== 'interaction-expanded') return;
+        const targets = region.querySelectorAll<HTMLButtonElement>('.expanded-panel [data-floating-focus-target]');
+        for (const target of targets) target.disabled = true;
+      }).observe(document.documentElement, { subtree: true, childList: true });
+    }, { once: true });
+  });
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  await page.getByRole('button', { name: '暂停' }).focus();
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  await expect(floating).not.toBeFocused();
+  await page.clock.fastForward(5_000);
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+});
+
 test('active capsule explicit activation expands without focus ownership', async ({
   browser
 }) => {
@@ -200,6 +225,25 @@ test('active capsule explicit activation expands without focus ownership', async
   await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
   await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
   await context.close();
+});
+
+test('ownership-free activation collapses exactly at its deadline', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-25T12:00:00Z') });
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  await page.clock.pauseAt(new Date('2026-08-25T12:00:10Z'));
+  await page.getByRole('button', { name: '展开悬浮窗' }).evaluate((button: HTMLElement) => button.click());
+  expect(await floating.getAttribute('data-display-mode')).toBe('interaction-expanded');
+  expect(await floating.evaluate((region) => !region.contains(document.activeElement))).toBe(true);
+
+  await page.clock.fastForward(4_999);
+  expect(await floating.getAttribute('data-display-mode')).toBe('interaction-expanded');
+  await page.clock.fastForward(1);
+  expect(await floating.getAttribute('data-display-mode')).toBe('capsule');
 });
 
 test('floating route renders an expanded idle companion', async ({

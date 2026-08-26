@@ -177,10 +177,53 @@ At active capsule 340x64 with mocked Tauri:
 - `Ruling: accept native preferences only for the latest semantic generation — obsolete success or reconciliation cannot overwrite newer desired state — cost if wrong: stale width, height, displayMode, or userResized wins.`
 - `Ruling: use file-wide beforeEach/afterEach browser-error hooks — one listener set covers every responsive test consistently — cost if wrong: duplicate listeners add noise or failures escape attribution.`
 
+## Fix round 2/5 evidence
+
+### Reset/native-size serialization
+
+RED before production coordination changes:
+
+- `npx vitest run src/lib/floating-size-sync.test.ts`
+- 11 tests: 3 failed, 8 passed.
+- All three failures were `requestFloatingReset is not a function`, proving reset had no distinct operation model. The scenarios cover reset requested behind an in-flight set, reset authority versus an obsolete set response in either completion order, and a newer capsule transition requested during reset.
+
+GREEN:
+
+- Focused size coordinator: 11/11 passed.
+- Reset and set operations now share one generation/token stream and one serialized drain. A reset receives a distinct intent generation, waits for an older set to settle, and only the latest intent may publish preferences.
+- A display-mode change requested during reset supersedes reset acceptance and drains after reset settles. Obsolete set/reset results cannot overwrite newer `userResized`, dimensions, or display mode.
+
+### Failed logical focus restoration
+
+The first browser attempt had a test setup error because the observer was attached before `documentElement`; that run is excluded from behavior evidence. After correcting setup, genuine RED was:
+
+- `npx playwright test --grep "failed logical focus restoration"`
+- 1/1 failed: expected capsule after 5,000 ms, received interaction-expanded. No page/console errors remained.
+
+GREEN:
+
+- 1/1 passed with real DOM behavior. The test disables every mapped expanded target before post-tick restoration, leaving no focus owner.
+- Production now tries the logical target, then a predictable first enabled marked fallback. After clearing transient focusout suppression it verifies `document.activeElement` is inside the region; if not, it dispatches real `focus-out`, arming bounded collapse.
+
+### Ownership-free activation deadline
+
+Executable browser coverage retains the real touchscreen tap and adds a standards-based `HTMLElement.click()` branch with Playwright clock. The branch asserts focus remains outside the region.
+
+- Initial fake-clock attempts exposed test-timing artifacts: retrying assertions and `setFixedTime` do not provide a reliable relative timer base. Those runs are not production REDs.
+- With `clock.pauseAt` immediately before activation, the deterministic test is stable: immediate interaction-expanded, still interaction-expanded at 4,999 ms, capsule exactly at 5,000 ms.
+- Stability check: 3/3 repeated runs passed.
+
+Focused round-2 aggregate GREEN:
+
+- Task 11 pure tests: 3 files, 26/26 passed.
+- `npm run check`: 0 errors, 0 warnings.
+- Active/failure/deadline/idle focused Playwright: 5/5 passed.
+
 ## Remaining Minors
 
 - Browser preview still has no task fixture with six visible tasks, so actual expanded-list overflow and the remainder label are covered structurally (`slice(0, 5)`, conditional remainder, local `overflow:auto`) rather than by a populated E2E.
-- Windows/Tauri smoke should still validate native window resizing, manual user-resize preservation, notification-warning presentation, and real event delivery outside the mocked browser IPC layer.
+- `FloatingExpandedPanel.svelte` calls `Date.now()` independently from parent `nowUnixMs`, so relative labels and overdue color can disagree briefly around a time boundary.
+- Task 12 owns Windows/Tauri smoke for native window resizing, manual user-resize preservation, notification-warning presentation, and real event delivery. Task 11 makes no native-smoke completion claim.
 
 ## Verification
 
@@ -189,9 +232,8 @@ Final post-code evidence:
 - Direct focused reducer/coordinator files after model-gap fixes: 3 files, 23/23 tests passed.
 - `npm run check`: 0 errors, 0 warnings.
 - Direct focused Playwright (`active capsule|expanded idle companion`): 3/3 passed.
-- Full `npm run test:unit`: 9 files, 75/75 passed.
-- Responsive Playwright file: 10/10 passed.
-- Full Playwright: 22/22 passed.
+- Full `npm run test:unit` after round 2: 9 files, 79/79 passed.
+- Full Playwright after round 2: 24/24 passed.
 - `git diff --check`: exit 0; only Git line-ending notices.
 - Changed authorized source/test/report files: strict UTF-8 and nonempty.
 - Exact scoped status was reviewed before staging; unrelated dirt and generated artifacts were excluded.

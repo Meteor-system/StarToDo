@@ -4,11 +4,15 @@ import {
   acceptFloatingPreferencesRead,
   acceptFloatingReconciliation,
   acceptFloatingSizeFailure,
+  acceptFloatingResetSuccess,
   acceptFloatingSizeSuccess,
+  beginFloatingResetRequest,
   beginFloatingSizeRequest,
   createFloatingSizeSyncState,
   failFloatingPreferencesRead,
+  nextFloatingResetRequest,
   nextFloatingSizeRequest,
+  requestFloatingReset,
   requestFloatingSize,
   retryFloatingSize,
   type FloatingSizeSyncState
@@ -117,6 +121,50 @@ describe('floating size sync coordination', () => {
     sync = acceptFloatingReconciliation(sync, obsolete, prefs('expanded', 380, true));
 
     expect(sync.preferences).toEqual(prefs('capsule', 340));
+    expect(nextFloatingSizeRequest(sync)).toMatchObject({ mode: 'capsule' });
+  });
+
+  it('serializes reset behind an older set and rejects the older set preferences', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingSize(sync, 'expanded');
+    const setRequest = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, setRequest);
+    sync = requestFloatingReset(sync);
+    expect(nextFloatingResetRequest(sync)).toBeNull();
+    sync = acceptFloatingSizeSuccess(sync, setRequest, prefs('expanded', 380, true));
+    const resetRequest = nextFloatingResetRequest(sync)!;
+    expect(sync.preferences).toEqual(prefs('capsule', 340, true));
+
+    sync = beginFloatingResetRequest(sync, resetRequest);
+    sync = acceptFloatingResetSuccess(sync, resetRequest, prefs('expanded', 380, false));
+    expect(sync.preferences).toEqual(prefs('expanded', 380, false));
+  });
+
+  it('keeps reset authoritative when its completion precedes an obsolete set response', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingSize(sync, 'expanded');
+    const setRequest = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, setRequest);
+    sync = requestFloatingReset(sync);
+    const resetRequest = sync.resetDesired!;
+
+    sync = beginFloatingResetRequest(sync, resetRequest);
+    sync = acceptFloatingResetSuccess(sync, resetRequest, prefs('expanded', 380, false));
+    sync = acceptFloatingSizeSuccess(sync, setRequest, prefs('expanded', 380, true));
+
+    expect(sync.preferences).toEqual(prefs('expanded', 380, false));
+  });
+
+  it('drains a newer display mode transition after reset', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('expanded', 380, true));
+    sync = requestFloatingReset(sync);
+    const resetRequest = sync.resetDesired!;
+    sync = beginFloatingResetRequest(sync, resetRequest);
+    sync = requestFloatingSize(sync, 'capsule');
+
+    sync = acceptFloatingResetSuccess(sync, resetRequest, prefs('expanded', 380, false));
+
+    expect(sync.preferences).toEqual(prefs('expanded', 380, true));
     expect(nextFloatingSizeRequest(sync)).toMatchObject({ mode: 'capsule' });
   });
 

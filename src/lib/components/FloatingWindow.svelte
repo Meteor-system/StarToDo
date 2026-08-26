@@ -34,12 +34,17 @@
   import {
     acceptFloatingPreferencesRead,
     acceptFloatingReconciliation,
+    acceptFloatingResetFailure,
+    acceptFloatingResetSuccess,
     acceptFloatingSizeFailure,
     acceptFloatingSizeSuccess,
+    beginFloatingResetRequest,
     beginFloatingSizeRequest,
     createFloatingSizeSyncState,
     failFloatingPreferencesRead,
+    nextFloatingResetRequest,
     nextFloatingSizeRequest,
+    requestFloatingReset,
     requestFloatingSize,
     retryFloatingSize
   } from '$lib/floating-size-sync';
@@ -166,8 +171,16 @@
   async function restoreLogicalFocus(target: FloatingFocusTarget, sequence: number): Promise<void> {
     await tick();
     if (disposed || sequence !== focusRestoreSequence) return;
-    root.querySelector<HTMLElement>(floatingFocusTargetSelector(target))?.focus();
-    if (sequence === focusRestoreSequence) pendingFocusRestore = null;
+    const preferred = root.querySelector<HTMLElement>(floatingFocusTargetSelector(target));
+    preferred?.focus();
+    if (!root.contains(document.activeElement)) {
+      root.querySelector<HTMLElement>('[data-floating-focus-target]:not(:disabled)')?.focus();
+    }
+    if (sequence !== focusRestoreSequence) return;
+    pendingFocusRestore = null;
+    if (!root.contains(document.activeElement)) {
+      dispatchFloating({ type: 'focus-out', at: Date.now() });
+    }
   }
 
   function applyAcceptedSnapshot(nextSnapshot: PomodoroSnapshot): void {
@@ -290,21 +303,10 @@
     }
   }
 
-  async function resetAutoSize(): Promise<void> {
+  function resetAutoSize(): void {
     if (!isTauriRuntime()) return;
-    const generation = sizeSync.generation;
-    try {
-      const next = await resetFloatingAutoSize();
-      if (disposed || sizeSync.generation !== generation) return;
-      sizeSync = { ...sizeSync, preferences: next };
-      sizeWarning = null;
-      requestSizeSync(floatingSizeMode(display.mode), true);
-    } catch (error) {
-      if (!disposed) {
-        sizeWarning = `恢复自动尺寸失败：${errorMessage(error)}`;
-        void reconcileFloatingPreferences(sizeSync.desired?.generation ?? sizeSync.generation);
-      }
-    }
+    sizeSync = requestFloatingReset(sizeSync);
+    void flushSizeSync();
   }
 
   function requestSizeSync(mode: FloatingSizeMode, explicit = false): void {
@@ -322,6 +324,28 @@
 
   async function flushSizeSync(): Promise<void> {
     if (disposed || !isTauriRuntime()) return;
+    if (sizeSync.inFlight !== null || sizeSync.resetInFlight !== null) return;
+
+    const resetRequest = nextFloatingResetRequest(sizeSync);
+    if (resetRequest !== null) {
+      sizeSync = beginFloatingResetRequest(sizeSync, resetRequest);
+      try {
+        const next = await resetFloatingAutoSize();
+        if (disposed) return;
+        sizeSync = acceptFloatingResetSuccess(sizeSync, resetRequest, next);
+        if (sizeSync.generation === resetRequest.generation) sizeWarning = null;
+      } catch (error) {
+        if (disposed) return;
+        sizeSync = acceptFloatingResetFailure(sizeSync, resetRequest);
+        if (sizeSync.generation === resetRequest.generation) {
+          sizeWarning = `恢复自动尺寸失败：${errorMessage(error)}`;
+        }
+      } finally {
+        if (!disposed) void flushSizeSync();
+      }
+      return;
+    }
+
     const request = nextFloatingSizeRequest(sizeSync);
     if (request === null) return;
     sizeSync = beginFloatingSizeRequest(sizeSync, request);
@@ -338,8 +362,7 @@
       }
       await reconcileFloatingPreferences(request.generation);
     } finally {
-      const next = nextFloatingSizeRequest(sizeSync);
-      if (!disposed && next !== null) void flushSizeSync();
+      if (!disposed) void flushSizeSync();
     }
   }
 

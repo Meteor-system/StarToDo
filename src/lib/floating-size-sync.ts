@@ -5,12 +5,18 @@ export interface FloatingSizeRequest {
   generation: number;
 }
 
+export interface FloatingResetRequest {
+  generation: number;
+}
+
 export interface FloatingSizeSyncState<T> {
   ready: boolean;
   generation: number;
   desired: FloatingSizeRequest | null;
   inFlight: FloatingSizeRequest | null;
   failed: FloatingSizeRequest | null;
+  resetDesired: FloatingResetRequest | null;
+  resetInFlight: FloatingResetRequest | null;
   appliedGeneration: number;
   preferences: T | null;
 }
@@ -22,6 +28,8 @@ export function createFloatingSizeSyncState<T>(): FloatingSizeSyncState<T> {
     desired: null,
     inFlight: null,
     failed: null,
+    resetDesired: null,
+    resetInFlight: null,
     appliedGeneration: 0,
     preferences: null
   };
@@ -36,7 +44,60 @@ export function requestFloatingSize<T>(
     ...state,
     generation,
     desired: { mode, generation },
+    failed: null,
+    resetDesired: null
+  };
+}
+
+export function requestFloatingReset<T>(
+  state: FloatingSizeSyncState<T>
+): FloatingSizeSyncState<T> {
+  const generation = state.generation + 1;
+  return {
+    ...state,
+    generation,
+    resetDesired: { generation },
     failed: null
+  };
+}
+
+export function nextFloatingResetRequest<T>(
+  state: FloatingSizeSyncState<T>
+): FloatingResetRequest | null {
+  if (!state.ready || state.inFlight !== null || state.resetInFlight !== null) return null;
+  return state.resetDesired;
+}
+
+export function beginFloatingResetRequest<T>(
+  state: FloatingSizeSyncState<T>,
+  request: FloatingResetRequest
+): FloatingSizeSyncState<T> {
+  return { ...state, resetInFlight: request };
+}
+
+export function acceptFloatingResetSuccess<T>(
+  state: FloatingSizeSyncState<T>,
+  request: FloatingResetRequest,
+  preferences: T
+): FloatingSizeSyncState<T> {
+  const current = state.generation === request.generation && state.resetDesired?.generation === request.generation;
+  return {
+    ...state,
+    resetInFlight: state.resetInFlight?.generation === request.generation ? null : state.resetInFlight,
+    resetDesired: current ? null : state.resetDesired,
+    preferences: current ? preferences : state.preferences,
+    appliedGeneration: current ? request.generation : state.appliedGeneration
+  };
+}
+
+export function acceptFloatingResetFailure<T>(
+  state: FloatingSizeSyncState<T>,
+  request: FloatingResetRequest
+): FloatingSizeSyncState<T> {
+  return {
+    ...state,
+    resetInFlight: state.resetInFlight?.generation === request.generation ? null : state.resetInFlight,
+    resetDesired: state.resetDesired?.generation === request.generation ? null : state.resetDesired
   };
 }
 
@@ -73,7 +134,13 @@ export function failFloatingPreferencesRead<T>(
 export function nextFloatingSizeRequest<T>(
   state: FloatingSizeSyncState<T>
 ): FloatingSizeRequest | null {
-  if (!state.ready || state.inFlight !== null || state.desired === null) return null;
+  if (
+    !state.ready ||
+    state.inFlight !== null ||
+    state.resetDesired !== null ||
+    state.resetInFlight !== null ||
+    state.desired === null
+  ) return null;
   if (state.failed?.generation === state.desired.generation) return null;
   if (state.appliedGeneration >= state.desired.generation) return null;
   return state.desired;
@@ -91,7 +158,7 @@ export function acceptFloatingSizeSuccess<T>(
   request: FloatingSizeRequest,
   preferences: T
 ): FloatingSizeSyncState<T> {
-  const current = state.desired?.generation === request.generation;
+  const current = state.generation === request.generation && state.desired?.generation === request.generation;
   return {
     ...state,
     inFlight: state.inFlight?.generation === request.generation ? null : state.inFlight,
@@ -105,7 +172,7 @@ export function acceptFloatingSizeFailure<T>(
   state: FloatingSizeSyncState<T>,
   request: FloatingSizeRequest
 ): FloatingSizeSyncState<T> {
-  const current = state.desired?.generation === request.generation;
+  const current = state.generation === request.generation && state.desired?.generation === request.generation;
   return {
     ...state,
     inFlight: state.inFlight?.generation === request.generation ? null : state.inFlight,
