@@ -140,14 +140,56 @@ test('returns from browser visual immersive mode before showing tasks', async ({
   await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
 });
 
-test('does not horizontally overflow at 320px wide', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 720 });
+const viewportMatrix = [
+  { width: 320, height: 720 },
+  { width: 520, height: 420 },
+  { width: 760, height: 560 },
+  { width: 1180, height: 760 },
+  { width: 1440, height: 900 }
+];
+
+for (const viewport of viewportMatrix) {
+  test(`task and focus scenes fit ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+
+    const fitsViewport = () => page.evaluate(() => ({
+      width: document.documentElement.scrollWidth <= window.innerWidth,
+      height: document.documentElement.scrollHeight <= window.innerHeight
+    }));
+
+    await expect.poll(fitsViewport).toEqual({ width: true, height: true });
+    await page.getByRole('button', { name: '专注' }).click();
+    await expect(page.getByRole('timer')).toBeVisible();
+    await expect.poll(fitsViewport).toEqual({ width: true, height: true });
+  });
+}
+
+test('scrolling is confined to visible declared local regions at 520x420', async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 420 });
   await page.goto('/');
+  await page.getByRole('button', { name: '周计划' }).click();
 
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const planner = page.getByRole('dialog', { name: '周计划' });
+  await expect(planner).toBeVisible();
+  const localRegion = planner.getByRole('tabpanel');
+  await expect(localRegion).toBeVisible();
+  await expect(localRegion).toHaveCSS('overflow-y', /auto|scroll/);
+  await expect.poll(() => page.evaluate(() => ({
+    top: document.scrollingElement?.scrollTop ?? -1,
+    left: document.scrollingElement?.scrollLeft ?? -1
+  }))).toEqual({ top: 0, left: 0 });
 
-  await page.getByRole('button', { name: '专注' }).click();
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const visibleRegions = page.locator('[data-scroll-region]:visible');
+  const visibleRegionCount = await visibleRegions.count();
+  for (let index = 0; index < visibleRegionCount; index += 1) {
+    await expect(visibleRegions.nth(index)).toHaveCSS('overflow-y', /auto|scroll/);
+  }
+
+  await localRegion.evaluate((region) => {
+    region.scrollTop = Math.min(1, Math.max(0, region.scrollHeight - region.clientHeight));
+  });
+  expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? -1)).toBe(0);
 });
 
 test('shows an explicit diagnostics error when a Tauri-only action is requested', async ({ page }) => {
@@ -165,20 +207,28 @@ test('shows an explicit diagnostics error when a Tauri-only action is requested'
 });
 
 
-test('renders the adaptive shell and diagnostics drawer', async ({ page }) => {
-  await page.goto('/');
+test.describe('reduced motion', () => {
+  test('keeps drawer and scene operations keyboard usable', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
 
-  await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible();
+    await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible();
 
-  const trigger = page.getByRole('button', { name: '打开设置与诊断' });
-  await trigger.click();
+    const trigger = page.getByRole('button', { name: '打开设置与诊断' });
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
+    await trigger.click();
+    await expect(page.getByRole('dialog', { name: '设置与诊断' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: '设置与诊断' })).not.toBeAttached();
+    await expect(trigger).toBeFocused();
 
-  await expect(page.getByRole('dialog', { name: '设置与诊断' })).toBeVisible();
-  await page.keyboard.press('Escape');
-
-  await expect(page.getByRole('dialog', { name: '设置与诊断' })).not.toBeAttached();
-  await expect(trigger).toBeFocused();
+    await page.getByRole('button', { name: '专注' }).click();
+    await expect(page.getByRole('main', { name: '专注场景' })).toBeVisible();
+    await expect(page.getByRole('timer')).toBeVisible();
+  });
 });
 
 test('keeps the document inside the viewport', async ({ page }) => {

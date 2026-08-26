@@ -1,0 +1,84 @@
+# Adaptive Focus Canvas Windows Smoke Test
+
+## Environment
+
+- Commit: `6416e303ec5ce37d47e64ce6b9d241bb5932327d` plus the uncommitted Task 12 E2E/checklist changes under verification.
+- Windows version: Windows 11 Pro 10.0.26200 build 26200, 64-bit.
+- Display scale: 100% (96 DPI), supplied runtime fact; registry `Win8DpiScaling=0` was observed, while `LogPixels` was unset.
+- Monitor layout: one active AOC2702 display, 2560 x 1440 at 180 Hz on NVIDIA GeForce RTX 3060; supplied runtime fact says one active monitor.
+- Build command: exact requested `npm run tauri -- build --bundles nsis` exposed npm forwarding failure (`tauri build nsis`, exit 1); correctly forwarded `npm run tauri -- build -- --bundles nsis` exited 0 and produced the NSIS bundle.
+- Test date: 2026-08-26.
+- Safety boundary: the real StarToDo 0.1.2 installation at `D:\Program Files\StarToDo`, real roaming/local app data, and the existing `startodo:` registration were inspected read-only only. The installed app was not launched, replaced, upgraded, or uninstalled. No protocol or notification registration was altered.
+
+## Main window
+
+- [ ] First launch opens maximized inside the Windows work area and keeps the taskbar visible. Blocker: native launch was unsafe because startup calls `register_all` for the live `startodo:` scheme and the exact installed/user-data isolation boundary was not guaranteed; static config only shows `maximized: true`.
+- [ ] Restored normal window cannot resize below 520 x 420. Blocker: no isolated native launch; static config shows `minWidth: 520` and `minHeight: 420`, but that is not runtime smoke evidence.
+- [x] The UI remains usable at 520 x 420. Observed evidence: Chromium E2E at 520 x 420 kept task and focus document width/height at 520 x 420, opened the planner drawer, exercised its visible local tabpanel, restored settings-trigger focus after Escape, and displayed the focus timer with no browser errors.
+- [ ] Normal size and position survive hide-to-tray, show, UI release/rebuild, and process restart. Blocker: requires a native process and persisted window preferences; live user data was protected.
+- [ ] Legacy compact preferences migrate without recreating compact mode. Blocker: Rust tests cover migration, but no isolated native legacy preference directory was launched.
+- [ ] Always-on-top still persists and applies. Blocker: requires native window and persisted preference mutation.
+
+## Focus and immersive mode
+
+- [ ] Starting a focus phase with preference unset asks once. Blocker: browser preview disables persistence/timer commands; native launch was unsafe.
+- [ ] “进入并记住” starts focus and enters true fullscreen. Blocker: requires native fullscreen and preference mutation.
+- [ ] “保持窗口模式” starts focus without fullscreen. Blocker: requires native Pomodoro persistence.
+- [ ] The diagnostics preference can restore “下次询问”. Blocker: requires persistent native preference mutation.
+- [ ] Escape exits fullscreen. Blocker: browser E2E proves Escape exits visual fallback only, not Windows true fullscreen.
+- [ ] The visible exit action exits fullscreen. Blocker: browser E2E proves visual fallback behavior only.
+- [ ] Exiting restores the exact prior maximized or normal state. Blocker: requires native window state transitions.
+- [x] A fullscreen command failure uses in-window immersive fallback without changing Pomodoro state. Observed evidence: browser preview has no Tauri backend, entering immersive set `.app-shell[data-immersive="visual-fallback"]`, Escape restored `off`, and the preview’s disabled Pomodoro controls prevented state mutation; browser-error hooks stayed empty.
+- [ ] Pause, resume, skip, reset, notification warning, and SQLite restoration still work. Blocker: requires isolated native database and notification-host interaction; Rust tests passed but are not native smoke.
+
+## Task scene
+
+- [ ] Search, execution filter, status filter, and project selection survive scene changes. Blocker: browser preview has no persisted task/project dataset and no isolated native dataset was launched.
+- [ ] Quick capture and partial batch retry still work. Blocker: browser preview intentionally disables task persistence.
+- [ ] Detailed task creation preserves project, reminder, priority, and recurrence fields. Blocker: requires isolated native database mutation.
+- [ ] Update, complete, restore, snooze, defer, delete, trash restore, and permanent delete work. Blocker: requires isolated native database mutation.
+- [ ] Stale task command results do not overwrite newer UI state. Blocker: unit coverage passed, but no native race was safely exercised.
+- [ ] Completing a task restores focus to an adjacent task or search. Blocker: browser preview has no mutable task rows.
+- [ ] Completion shows the non-blocking star feedback. Blocker: browser preview has no mutable task rows.
+- [ ] Notification activation reveals and focuses the intended task. Blocker: requires notification/protocol registration and native database state.
+
+## Planner
+
+- [x] Wide planner shows unscheduled plus seven day columns. Observed evidence: Chromium at 1180 x 760 showed the wide board region, hid the narrow tablist/tabpanel, measured the planner at 948 x 674, and kept the document at 1180 x 760.
+- [x] Narrow planner shows the date strip and one selected bucket. Observed evidence: Chromium at 520 x 420 showed eight reachable date tabs, exactly one selected tab, and one visible selected-bucket tabpanel while the wide board was hidden.
+- [ ] Reschedule failures restore the previous select value and show the existing error. Blocker: browser preview has no mutable task data/Tauri command failure path.
+- [ ] Planner-to-list navigation closes the drawer and focuses the task. Blocker: browser preview has no task rows.
+- [x] Planner scrolling never moves the document. Observed evidence: at 520 x 420 the visible planner tabpanel had local `overflow-y` auto/scroll, was programmatically exercised, and `document.scrollingElement.scrollTop` remained exactly 0; browser-error hooks stayed empty.
+
+## Floating window
+
+- [x] Idle state opens expanded. Observed evidence: Chromium floating-route E2E at 360 x 260 rendered region `StarToDo 悬浮窗` with `data-display-mode="expanded"`, an accessible “打开专注工作区” action, document 360 x 260, and local body overflow `auto`.
+- [x] Running or paused focus defaults to capsule. Observed evidence: the active Tauri browser fixture returned a running focus snapshot and Chromium asserted `data-display-mode="capsule"` at 340 x 64.
+- [x] Pointer or keyboard interaction expands the capsule. Observed evidence: keyboard Tab/focus and explicit touch activation each changed the active fixture from `capsule` to `interaction-expanded`.
+- [x] Expansion collapses after the five-second interaction window and leave buffer. Observed evidence: a clock-controlled Chromium test kept `interaction-expanded` at 4,999 ms and observed `capsule` exactly at 5,000 ms without focus ownership.
+- [x] Keyboard focus inside prevents collapse. Observed evidence: Chromium focus-restoration coverage moved logical focus from capsule controls to matching expanded controls; reducer/unit coverage passed in the full gate, but no Windows-native WebView2 run was performed.
+- [ ] “始终展开” persists across floating-window recreation and process restart. Blocker: requires native preference persistence and process recreation.
+- [ ] Manual resize is not overwritten by later display-state changes. Blocker: requires a native resizable WebView window.
+- [ ] “恢复自动尺寸” restores the recommended size. Blocker: requires native window sizing.
+- [ ] Floating task and focus intents open the correct main-window scene. Blocker: requires two native windows and backend intent routing.
+- [ ] Closing the floating window hides it instead of exiting the app. Blocker: requires native window close behavior.
+
+## Tray, notification, and installer
+
+- [ ] Tray Show works. Blocker: requires native tray interaction.
+- [ ] Tray Focus queues the focus scene intent. Blocker: requires native tray/backend interaction.
+- [ ] Tray 悬浮窗 toggles the floating window. Blocker: requires native tray/window interaction.
+- [ ] Tray Hide works. Blocker: requires native tray/window interaction.
+- [ ] Tray Release UI destroys and safely recreates the main UI. Blocker: requires native WebView lifecycle interaction.
+- [ ] Tray Quit exits the process. Blocker: requires native tray/process interaction.
+- [ ] Task notification activation works. Blocker: notification registration and real user data could not be mutated safely.
+- [ ] Pomodoro notification activation works. Blocker: notification registration and native SQLite state could not be mutated safely.
+- [ ] Installed-app protocol activation works. Blocker: the real `startodo:` command points to `D:\Code\Rust\StarToDo\src-tauri\target\debug\startodo.exe`; launching it would be outside this worktree and could mutate real user data/registration.
+- [ ] Uninstall removes the app and protocol registration cleanly. Blocker: no disposable Windows Sandbox/VM exists, and uninstalling the real installation is explicitly prohibited.
+
+## Read-only native and installer observations
+
+- The stopped installed binary `D:\Program Files\StarToDo\StarToDo.exe` exists, reports file version 0.1.2, and is 14,196,224 bytes. This does not count as launch/upgrade smoke.
+- `%APPDATA%\com.aidotnet.startodo` and `%LOCALAPPDATA%\com.aidotnet.startodo` both exist; they were not opened or mutated.
+- `HKCU\Software\Classes\startodo\shell\open\command` was read as `"D:\Code\Rust\StarToDo\src-tauri\target\debug\startodo.exe" "%1"`; the key was not changed.
+- The isolated worktree config uses the same live identifier `com.aidotnet.startodo` and scheme `startodo`, and startup calls `app.deep_link().register_all()`. No temporary alternate config was created because safely proving every identifier/data/notification/protocol boundary would require changing multiple runtime authorities outside Task 12.
