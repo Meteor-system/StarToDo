@@ -30,3 +30,14 @@ Validation commands and results:
 - `git diff --check`: passed.
 
 Self-review: all verified Critical/Important findings are addressed; Task 9 immersive integration is the sole documented deferred Minor, and unrelated dirty files remain unstaged.
+
+## Fix-round gate evidence addendum
+
+Independent verification for the committed fix:
+
+- `npm run check`: passed, 0 errors and 0 warnings.
+- `npm run test:unit`: passed, 51/51 tests.
+- `$env:CI='1'; npm run test:e2e -- '--grep=adaptive shell|inside the viewport|diagnostics'`: passed, 8/8 tests.
+- `git diff --check`: passed.
+
+Deferred item remains unchanged: Task 9 owns actual immersive display integration; Task 5 intentionally keeps `immersiveDisplay` initialized to `'off'`.
