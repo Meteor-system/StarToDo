@@ -46,4 +46,4 @@ Independent verification for the committed fix:
 
 Deferred item remains unchanged: Task 9 owns actual immersive display integration; Task 5 intentionally keeps `immersiveDisplay` initialized to `'off'`.
 
-Ruling: category-toast dismissal is session-scoped for Task 5 — why: the brief requires presentation-only dismissal and stable IDs but does not define recurrence reset; cost if wrong: an identical recurring reminder or floating-window error may remain hidden until page reload.
+Ruling: category-toast dismissal is intentionally session-scoped for Task 5, and recurrence suppression is a deferred Minor — why: the brief requires presentation-only dismissal and stable IDs but does not define recurrence reset; cost if wrong: repeated reminder or floating-window errors may stay hidden until reload.
