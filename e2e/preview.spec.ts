@@ -21,6 +21,29 @@ test.afterEach(async ({ page }, testInfo) => {
   expect(errors, `Unexpected browser errors:\n${errors.join('\n')}`).toEqual([]);
 });
 
+test('opens task tools as contextual drawers', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('heading', { name: '今天要推进什么？' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: '项目' }).click();
+  await expect(
+    page.getByRole('dialog', { name: '项目' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: '周计划' }).click();
+  await expect(
+    page.getByRole('dialog', { name: '周计划' })
+  ).toBeVisible();
+
+  await expect(
+    page.getByRole('heading', { name: '今天要推进什么？' })
+  ).toBeVisible();
+});
+
 test('renders the browser preview page shell without runtime errors', async ({ page }) => {
   await page.goto('/');
 
@@ -121,21 +144,21 @@ test('keeps the primary workspace controls keyboard reachable with visible focus
   await expect(page.getByText('浏览器预览已禁用任务持久化；请在桌面应用中管理任务。', { exact: true })).toBeVisible();
 
   const search = page.getByRole('textbox', { name: '搜索任务' });
-  const listView = page.getByRole('button', { name: '列表', pressed: true });
-  const weekView = page.getByRole('button', { name: '周计划', pressed: false });
+  const planner = page.getByRole('button', { name: '周计划' });
+  const filters = page.getByRole('button', { name: '筛选' });
 
   await search.focus();
   await expect(search).toBeFocused();
   await expect(search).toHaveCSS('outline-style', /^(?!none$).+/);
   await expect(search).toHaveCSS('outline-width', /^(?!0px$).+/);
 
-  await listView.focus();
-  await expect(listView).toBeFocused();
-  await expect(listView).toHaveCSS('outline-style', /^(?!none$).+/);
-  await expect(listView).toHaveCSS('outline-width', /^(?!0px$).+/);
+  await filters.focus();
+  await expect(filters).toBeFocused();
+  await expect(filters).toHaveCSS('outline-style', /^(?!none$).+/);
+  await expect(filters).toHaveCSS('outline-width', /^(?!0px$).+/);
 
-  await weekView.focus();
-  await expect(weekView).toBeFocused();
-  await expect(weekView).toHaveCSS('outline-style', /^(?!none$).+/);
-  await expect(weekView).toHaveCSS('outline-width', /^(?!0px$).+/);
+  await planner.focus();
+  await expect(planner).toBeFocused();
+  await expect(planner).toHaveCSS('outline-style', /^(?!none$).+/);
+  await expect(planner).toHaveCSS('outline-width', /^(?!0px$).+/);
 });

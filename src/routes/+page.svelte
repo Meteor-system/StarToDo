@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import TaskWorkspace from '$lib/components/TaskWorkspace.svelte';
+  import TaskScene from '$lib/components/TaskScene.svelte';
   import FocusWorkspace from '$lib/components/FocusWorkspace.svelte';
   import FocusMiniBar from '$lib/components/FocusMiniBar.svelte';
   import FloatingWindow from '$lib/components/FloatingWindow.svelte';
@@ -741,10 +741,9 @@
   {/if}
 
   {#if activeScene === 'tasks'}
-    <TaskWorkspace
+    <TaskScene
       {tauriAvailable}
       {initialized}
-      compact={false}
       activationId={notificationActivationId}
       activationNonce={notificationActivationNonce}
       {pomodoroCounts}
