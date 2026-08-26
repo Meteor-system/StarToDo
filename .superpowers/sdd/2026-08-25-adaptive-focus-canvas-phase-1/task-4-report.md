@@ -88,3 +88,11 @@ Verification:
 Self-review: capture remains before `set_fullscreen(true)` and runtime restore state is written only after fullscreen succeeds. No Pomodoro, reminder, activation, tray, or UI-release state is touched. Concern: Tauri window APIs cannot be integration-tested without a live desktop window; the conversion helper test covers scale conversion and command compilation covers API usage.
 
 Rust follow-up commit: `Implement refreshed immersive bounds capture`
+
+## Correction addendum
+
+Re-checked the reviewer’s two Important findings at current HEAD. `enter_immersive_mode` now refreshes normal bounds directly before fullscreen for a non-maximized/non-fullscreen window, using physical-to-logical conversion and retaining persisted bounds for maximized windows. `changeAlwaysOnTop` performs exactly one backend invocation through `setAlwaysOnTop`.
+
+Verification: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed; focused `immersive_restore` tests passed 2/2; full Rust tests passed 74/74; `npm run check` passed with 0 errors and 0 warnings. Source inspection found no live `set_window_mode` invocation and one `setAlwaysOnTop` call in the handler.
+
+Correction commit: `Correct immersive bounds refresh and window toggle`

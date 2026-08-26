@@ -3093,12 +3093,8 @@ fn current_window_state(app: &AppHandle) -> Result<WindowState, String> {
     if !maximized && !fullscreen {
         if let Ok(size) = window.inner_size() {
             let position = window.outer_position().ok();
-            preferences.normal_bounds = WindowBounds {
-                x: position.as_ref().map(|p| p.x),
-                y: position.as_ref().map(|p| p.y),
-                width: size.width,
-                height: size.height,
-            };
+            let scale_factor = window.scale_factor().unwrap_or(1.0);
+            preferences.normal_bounds = WindowBounds::from_physical(position, size, scale_factor);
         }
     }
     Ok(WindowState {
