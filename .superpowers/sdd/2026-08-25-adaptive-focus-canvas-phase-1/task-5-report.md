@@ -2,9 +2,13 @@
 
 Partial-state handoff was preserved. Existing unrelated dirty files were not reset or modified. Completed the adaptive AppShell, ContextDrawer focus lifecycle, ToastStack presentation, diagnostics rename/control cleanup, UI state types, viewport invariants, and page integration while retaining Task 4 explicit window wrappers and compact={false} TaskWorkspace behavior.
 
+## Initial implementation validation (superseded by fix round 1)
+
+The following records the first implementation state only; the fix-round section below is the authoritative final validation and status.
+
 Validation:
 
-- `npm run check`: passed with one existing-style accessibility warning on the dialog element.
+- `npm run check`: passed with one accessibility warning on the required dialog element.
 - `npm run test:unit`: passed, 51 tests.
 - Focused E2E: adaptive shell and viewport tests passed; legacy diagnostics and keyboard-order tests need follow-up because the shell migration changes their selectors/focus order.
 
@@ -41,3 +45,5 @@ Independent verification for the committed fix:
 - `git diff --check`: passed.
 
 Deferred item remains unchanged: Task 9 owns actual immersive display integration; Task 5 intentionally keeps `immersiveDisplay` initialized to `'off'`.
+
+Ruling: category-toast dismissal is session-scoped for Task 5 — why: the brief requires presentation-only dismissal and stable IDs but does not define recurrence reset; cost if wrong: an identical recurring reminder or floating-window error may remain hidden until page reload.
