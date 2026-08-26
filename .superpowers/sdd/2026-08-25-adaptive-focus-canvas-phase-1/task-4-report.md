@@ -96,3 +96,9 @@ Re-checked the reviewer’s two Important findings at current HEAD. `enter_immer
 Verification: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed; focused `immersive_restore` tests passed 2/2; full Rust tests passed 74/74; `npm run check` passed with 0 errors and 0 warnings. Source inspection found no live `set_window_mode` invocation and one `setAlwaysOnTop` call in the handler.
 
 Correction commit: `Correct immersive bounds refresh and window toggle`
+
+## Reviewer correction verification
+
+Current source inspection confirms `enter_immersive_mode` performs enter-time capture at lines 3123–3134: normal windows read `inner_size`, `outer_position`, and `scale_factor`, then convert physical values through `WindowBounds::from_physical`; maximized windows retain persisted `normal_bounds`. The fullscreen call follows capture, and runtime restore state is written only after fullscreen succeeds. `changeAlwaysOnTop` contains exactly one `setAlwaysOnTop(enabled)` invocation and no generic `run` call.
+
+Fresh evidence: focused `immersive_restore` 2 passed; full Rust suite 74 passed; `cargo fmt --check` passed; `npm run check` passed with 0 errors and 0 warnings. No unrelated files were staged.
