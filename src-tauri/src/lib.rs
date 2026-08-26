@@ -1540,13 +1540,18 @@ fn floating_window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> 
         .map_err(string_error)
 }
 
+fn floating_window_size_bounds() -> ((f64, f64), (f64, f64)) {
+    ((260.0, 56.0), (800.0, 800.0))
+}
+
 fn validate_floating_window_preferences(
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
-    if !(260.0..=800.0).contains(&preferences.width) {
+    let ((min_width, min_height), (max_width, max_height)) = floating_window_size_bounds();
+    if !(min_width..=max_width).contains(&preferences.width) {
         return Err("floating window width must be between 260 and 800".to_string());
     }
-    if !(56.0..=800.0).contains(&preferences.height) {
+    if !(min_height..=max_height).contains(&preferences.height) {
         return Err("floating window height must be between 56 and 800".to_string());
     }
     for coordinate in [preferences.x, preferences.y].into_iter().flatten() {
@@ -1557,7 +1562,7 @@ fn validate_floating_window_preferences(
     Ok(())
 }
 
-fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreferences {
+fn read_floating_window_preferences_from_disk(app: &AppHandle) -> FloatingWindowPreferences {
     let Ok(path) = floating_window_preferences_path(app) else {
         return FloatingWindowPreferences::default();
     };
@@ -1570,7 +1575,7 @@ fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreference
         .unwrap_or_default()
 }
 
-fn save_floating_window_preferences_to_disk(
+fn save_floating_window_preferences_to_disk_unlocked(
     app: &AppHandle,
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
@@ -1583,6 +1588,15 @@ fn save_floating_window_preferences_to_disk(
     fs::write(path, content).map_err(string_error)
 }
 
+fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreferences {
+    let state = app.state::<AppState>();
+    let _guard = state
+        .floating_window_preferences_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    read_floating_window_preferences_from_disk(app)
+}
+
 fn update_floating_window_preferences(
     app: &AppHandle,
     update: impl FnOnce(&mut FloatingWindowPreferences),
@@ -1591,10 +1605,10 @@ fn update_floating_window_preferences(
     let _guard = state
         .floating_window_preferences_lock
         .lock()
-        .map_err(string_error)?;
-    let mut preferences = read_floating_window_preferences(app);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut preferences = read_floating_window_preferences_from_disk(app);
     update(&mut preferences);
-    save_floating_window_preferences_to_disk(app, &preferences)?;
+    save_floating_window_preferences_to_disk_unlocked(app, &preferences)?;
     Ok(preferences)
 }
 
@@ -1605,9 +1619,9 @@ fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = window_for_events.hide();
-            let mut preferences = read_floating_window_preferences(&app_for_events);
-            preferences.visible = false;
-            let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
+            let _ = update_floating_window_preferences(&app_for_events, |preferences| {
+                preferences.visible = false;
+            });
             return;
         }
 
@@ -1679,9 +1693,10 @@ fn show_floating_window_internal(app: &AppHandle) -> Result<(), String> {
             .map_err(string_error)?;
         window.show().map_err(string_error)?;
         window.set_focus().map_err(string_error)?;
-        let mut updated = preferences;
-        updated.visible = true;
-        return save_floating_window_preferences_to_disk(app, &updated);
+        update_floating_window_preferences(app, |preferences| {
+            preferences.visible = true;
+        })?;
+        return Ok(());
     }
 
     let app_for_thread = app.clone();
@@ -1698,6 +1713,7 @@ fn create_floating_window(
     app: &AppHandle,
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
+    let ((min_width, min_height), (max_width, max_height)) = floating_window_size_bounds();
     let window = WebviewWindowBuilder::new(
         app,
         FLOATING_WINDOW_LABEL,
@@ -1705,6 +1721,8 @@ fn create_floating_window(
     )
     .title("StarToDo 悬浮窗")
     .inner_size(preferences.width, preferences.height)
+    .min_inner_size(min_width, min_height)
+    .max_inner_size(max_width, max_height)
     .decorations(false)
     .always_on_top(preferences.always_on_top)
     .skip_taskbar(true)
@@ -1720,9 +1738,9 @@ fn create_floating_window(
     }
     install_floating_window_tracking(app, &window);
 
-    let mut updated = preferences.clone();
-    updated.visible = true;
-    save_floating_window_preferences_to_disk(app, &updated)?;
+    update_floating_window_preferences(app, |preferences| {
+        preferences.visible = true;
+    })?;
     window.show().map_err(string_error)?;
     window.set_focus().map_err(string_error)
 }
@@ -1731,9 +1749,10 @@ fn hide_floating_window_internal(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
         window.hide().map_err(string_error)?;
     }
-    let mut preferences = read_floating_window_preferences(app);
-    preferences.visible = false;
-    save_floating_window_preferences_to_disk(app, &preferences)
+    update_floating_window_preferences(app, |preferences| {
+        preferences.visible = false;
+    })?;
+    Ok(())
 }
 
 fn toggle_floating_window_internal(app: &AppHandle) -> Result<(), String> {
@@ -3663,6 +3682,14 @@ mod tests {
         assert_eq!(
             floating_display_size(FloatingDisplayMode::Expanded),
             (360.0, 260.0)
+        );
+    }
+
+    #[test]
+    fn floating_window_bounds_are_exact() {
+        assert_eq!(
+            floating_window_size_bounds(),
+            ((260.0, 56.0), (800.0, 800.0))
         );
     }
 

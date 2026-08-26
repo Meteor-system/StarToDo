@@ -49,11 +49,11 @@ One attempted cargo invocation supplied two positional test filters and failed a
 
 - Added camelCase `FloatingDisplayMode::{Capsule, Expanded}` with exact recommended sizes `(340.0, 64.0)` and `(360.0, 260.0)` and default `Expanded`.
 - Extended persisted floating preferences with serde-default `user_resized=false` and `display_mode=Expanded`; defaults are now 360 x 260.
-- Updated validation to width 260..=800 and height 56..=800 while preserving coordinate bounds.
+- Updated validation to width 260..=800 and height 56..=800 while preserving coordinate bounds. A single pure bounds helper now also configures native `.min_inner_size(260.0, 56.0)` and `.max_inner_size(800.0, 800.0)`, preventing native resize events from producing persistently invalid logical sizes.
 - Added `FloatingWindowRuntime` to `AppState`, with the exact required target/deadline fields plus an internal generation token used only to distinguish repeated/concurrent resize requests during error cleanup.
 - Programmatic target state is installed before `set_size`; the runtime mutex is released before calling Tauri. A failed older request can clear only its own generation and cannot erase a newer identical target.
 - Split actual window events: Moved persists only logical coordinates; Resized converts the event physical size to a rounded logical tuple, classifies it, and persists the actual logical width/height.
-- Serialized floating preference read-modify-write transactions through a dedicated mutex so callbacks cannot revert newer command state. The preference mutex is not held across `set_size` or any visibility/focus API.
+- Initial implementation serialized only Moved/Resized and set/reset mutations. Controller review correctly found that close, show/create, hide, and get still bypassed the lock. The follow-up routes every in-process preference disk read/write through one recoverable mutex; field-specific updates preserve unrelated fields, and the mutex is never held across `set_size`, show, hide, or focus.
 - Added and registered `set_floating_display_mode` and `reset_floating_auto_size`. Neither command calls show, hide, or focus. Existing hidden windows can resize while remaining hidden.
 - Extended `src/lib/windowing.ts` with the exact union, preference fields, and typed invoke wrappers.
 
@@ -64,7 +64,7 @@ One attempted cargo invocation supplied two positional test filters and failed a
 - Clock boundary: `now <= programmatic_until_unix_ms` is protected; `now > until` is expired.
 - Target clearing: matching protected target clears target/deadline; intermediate protected mismatch retains them; expired target clears and marks user; no target marks user.
 - Error cleanup: target, deadline, and generation must all match the failed request. A newer repeated identical request is preserved.
-- Event persistence: a dedicated preference mutation lock prevents lost updates between move/resize callbacks and mode/reset commands.
+- Event and lifecycle persistence: CloseRequested, show-existing, create completion, hide, Moved, Resized, mode, and reset all apply field-specific deltas through the locked update helper. Get and initial show/create snapshots use the locked reader, so no in-process reader can observe the file during its truncate/write interval.
 - Legacy serde: the exact legacy JSON preserves visible/x/y/width/height/alwaysOnTop and defaults the two new fields.
 - Validation: range containment rejects NaN and positive/negative infinity implicitly as well as out-of-range finite values; coordinate validation is unchanged.
 - Visibility/focus: the new commands contain no show/hide/focus calls. Only the pre-existing explicit show/create flows retain such calls.
@@ -75,8 +75,9 @@ One attempted cargo invocation supplied two positional test filters and failed a
 - Ruling: treat the deadline instant as still protected (`now <= until`) — the brief says the deadline is unexpired through its boundary — cost if wrong: an event arriving in the exact deadline millisecond could be classified opposite to controller intent.
 - Ruling: retain intermediate mismatches until the target arrives or the deadline expires — native resize callbacks can emit transient sizes — cost if wrong: a user's real resize within the 1.5-second protection window could be ignored until a later event.
 - Ruling: add an internal generation token in addition to the exact required runtime fields — target/deadline equality alone cannot distinguish identical requests issued in one millisecond — cost if wrong: negligible private runtime state; omitting it risks an older failure erasing a newer request.
-- Ruling: serialize floating preference mutations with a dedicated mutex — file-backed read-modify-write otherwise loses concurrent command/callback fields — cost if wrong: very short preference I/O serialization; omitting it risks reverting display mode or manual-resize state.
-- Ruling: persist preferences before applying programmatic resize in the two new commands — mode/reset must always persist, while the resize is a fallible presentation side effect — cost if wrong: on a resize failure the command returns an error although the requested preference is already durable.
+- Ruling: use one recoverable mutex across every in-process floating preference disk read and write — file-backed reads can otherwise observe truncate/write and lifecycle updates can lose concurrent command/event fields — cost if wrong: short disk-I/O serialization; bypassing it risks defaults from partial JSON or reverted mode/manual state.
+- Ruling: use one pure bounds authority for persistence validation and native window constraints — the OS-resizable surface must not emit logical sizes the persistence layer rejects — cost if wrong: a platform could round a physical boundary event by a logical pixel, but shared logical constraints and rounded event conversion minimize this bounded DPI edge.
+- Ruling: persist preferences before applying programmatic resize in the two new commands — durable user intent is authoritative while `set_size` is a fallible presentation side effect — cost if wrong: on a resize failure the command returns an error although the requested preference is already durable; changing this atomically would require rollback coordination with resize callbacks and is deferred as a Minor rather than risk reintroducing races.
 - Ruling: rely on Rust range containment for finite validation — NaN and infinities fail inclusive range containment already — cost if wrong: error text remains range-oriented rather than explicitly saying “finite.”
 
 ## Verification ordering and evidence
@@ -98,7 +99,28 @@ One attempted cargo invocation supplied two positional test filters and failed a
 
 Rust test runs emit one existing Windows/MSVC linker informational warning (`linker stdout` reporting creation of `.dll.lib` and `.dll.exp`); there are no compiler warnings attributable to Task 10. Cargo lock-wait messages occurred only while intentionally running filtered commands concurrently.
 
+## Controller follow-up review and concurrency audit
+
+Controller review of `e3103dd` found three related Important defects: serialization covered only some mutation paths, native window resizing was not constrained to the persisted range, and the report overstated serialization. The follow-up fixes all three.
+
+- New exact bounds RED: `cargo test --manifest-path src-tauri/Cargo.toml floating_window_bounds_are_exact -- --nocapture` exited 1 with E0425 because `floating_window_size_bounds` did not exist.
+- First GREEN attempt then exposed E0515 from returning a guard tied to a local Tauri state handle; the guard helper was removed and lock ownership kept local to each read/update wrapper.
+- Exact bounds GREEN: 1 passed, 0 failed, 83 filtered out; main binary 0 tests.
+- All `floating_` focused tests: 3 passed, 0 failed, 81 filtered out.
+- Programmatic resize/generation tests: 4 passed, 0 failed, 80 filtered out; ABA older-failure cleanup: 1 passed, 0 failed, 83 filtered out.
+- Follow-up final full Rust: 84 passed, 0 failed; main 0; doc 0. `npm run check`: 0 errors, 0 warnings. Rust fmt-check and diff-check: exit 0.
+- Raw call-site proof: `read_floating_window_preferences_from_disk` appears only in the locked read wrapper and locked update helper; `save_floating_window_preferences_to_disk_unlocked` appears only in the locked update helper.
+- Close vs resize/mode and hide/show vs mode/reset: all persistence deltas serialize on one preference mutex and mutate only owned fields.
+- Get during write: the getter uses the same mutex and cannot observe the truncate/write interval.
+- Create completion vs mode: create uses an initial locked snapshot but completion sets only `visible=true` against current locked preferences, so it does not revert a newer mode or dimensions.
+- Runtime lock ordering: Resized releases the runtime lock before acquiring the preference lock; programmatic resize releases runtime before `set_size`; no path holds preference and runtime locks together.
+- Window APIs: no preference lock is held across `set_size`, show, hide, focus, builder construction, or position changes.
+- DPI boundary: native min/max sizes and validation share logical bounds. Physical Resized values are converted with the current scale factor and rounded; a platform-specific fractional-DPI one-pixel rounding anomaly remains bounded and would be rejected rather than persisted if it crosses the shared logical range.
+- Create snapshot residual: a mode change after the locked snapshot but before background builder construction can create the window once at the older snapshot size. The completion update preserves current mode/dimensions, and subsequent frontend mode application or reset corrects the live size. Eliminating this bounded startup race would require broader create coordination beyond Task 10.
+
 ## Deferred Minors
 
-- Explicit `is_finite()` validation and focused NaN/infinity/boundary tests are not required for correctness because the existing inclusive range predicates reject every non-finite value. This remains a documentation/error-message clarity improvement, not a functional gap.
+- Set/reset persist durable user intent before fallible `set_size`. A command can return `Err` while mode/reset preferences remain durable. This is intentional and documented; atomic rollback would need callback-aware coordination and is not justified for this focused fix.
+- Explicit `is_finite()` validation and focused NaN/infinity tests remain optional clarity improvements because inclusive range containment already rejects every non-finite value. Exact finite bounds are now tested.
+- The create-thread snapshot can briefly construct at an older mode size if mode changes during creation, as bounded above; current persisted state is not reverted.
 - No live Windows GUI smoke test was performed in this bounded backend/typed-wrapper task. Static inspection proves the new commands do not show, hide, or focus; controller-level Windows smoke coverage remains appropriate for the phase integration pass.
