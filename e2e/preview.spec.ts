@@ -158,6 +158,65 @@ test('shows a centered focus stage and exits visual immersive mode', async ({
   );
 });
 
+test('a newer focus intent supersedes a tasks transition awaiting immersive exit', async ({ page }) => {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (payload: unknown) => void>();
+    let callbackId = 0;
+    let resolveImmersiveExit: (() => void) | null = null;
+    const snapshot = {
+      settings: { focusMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, longBreakInterval: 4, updatedAtUnixMs: Date.now() },
+      currentSession: null,
+      completedFocusesInCycle: 0,
+      recommendedPhase: 'focus',
+      completedFocusTodayCount: 0
+    };
+
+    Object.assign(window, {
+      __resolveImmersiveExit() { resolveImmersiveExit?.(); },
+      __TAURI_INTERNALS__: {
+        transformCallback(callback: (payload: unknown) => void) {
+          const id = ++callbackId;
+          callbacks.set(id, callback);
+          return id;
+        },
+        unregisterCallback(id: number) { callbacks.delete(id); },
+        async invoke(command: string) {
+          if (command === 'get_pomodoro_view') return { snapshot, taskSummaries: [] };
+          if (command === 'get_pomodoro') return snapshot;
+          if (command === 'enter_immersive_mode') return { maximized: true, fullscreen: true, alwaysOnTop: false, normalBounds: { x: null, y: null, width: 960, height: 680 } };
+          if (command === 'exit_immersive_mode') {
+            await new Promise<void>((resolve) => { resolveImmersiveExit = resolve; });
+            return { maximized: true, fullscreen: false, alwaysOnTop: false, normalBounds: { x: null, y: null, width: 960, height: 680 } };
+          }
+          if (command === 'list_tasks' || command === 'list_projects' || command === 'list_reminders') return [];
+          if (command === 'list_deleted_tasks' || command === 'list_missed_reminders' || command === 'list_reliability_incidents') return [];
+          if (command === 'claim_pending_pomodoro_activations' || command === 'claim_pending_activations') return { claimId: null, items: [] };
+          if (command === 'reconcile_reminders') return { warning: null };
+          if (command === 'take_pending_floating_intent') return null;
+          if (command === 'plugin:event|listen') return 1;
+          if (command === 'plugin:event|unlisten' || command === 'record_ui_not_ready') return null;
+          if (command === 'record_ui_ready') return { runtimeSnapshot: {}, reminderWarningListenerToken: 1 };
+          throw new Error(`Unexpected mocked Tauri command: ${command}`);
+        }
+      }
+    });
+  });
+  await page.goto('/');
+
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '专注', exact: true }).click();
+  await page.getByRole('button', { name: '进入沉浸' }).click();
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-immersive', 'system');
+
+  await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button')];
+    buttons.find((button) => button.textContent?.trim() === '返回任务')?.click();
+    buttons.find((button) => button.textContent?.trim() === '专注')?.click();
+    (window as Window & { __resolveImmersiveExit: () => void }).__resolveImmersiveExit();
+  });
+
+  await expect(page.getByRole('main', { name: '专注场景' })).toBeVisible();
+});
+
 test('returns from browser visual immersive mode before showing tasks', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '专注' }).click();

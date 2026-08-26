@@ -359,13 +359,15 @@
     return scene === 'tasks' ? tasksSceneHost : focusSceneHost;
   }
 
-  function rememberSceneFocus(scene: AppScene): boolean {
+  function focusedSceneElement(scene: AppScene): HTMLElement | null {
     const host = sceneHost(scene);
     const activeElement = document.activeElement;
-    if (!(activeElement instanceof HTMLElement) || !host?.contains(activeElement)) return false;
-    if (scene === 'tasks') taskSceneFocusTarget = activeElement;
-    else focusSceneFocusTarget = activeElement;
-    return true;
+    return activeElement instanceof HTMLElement && host?.contains(activeElement) ? activeElement : null;
+  }
+
+  function rememberSceneFocus(scene: AppScene, target: HTMLElement): void {
+    if (scene === 'tasks') taskSceneFocusTarget = target;
+    else focusSceneFocusTarget = target;
   }
 
   function firstSceneControl(scene: AppScene): HTMLElement | null {
@@ -382,16 +384,18 @@
     const focusSequence = ++sceneFocusSequence;
     if (scene === activeScene) return;
     const outgoingScene = activeScene;
-    const restoreSceneFocus = rememberSceneFocus(outgoingScene);
+    const outgoingFocusTarget = focusedSceneElement(outgoingScene);
     if (scene === 'tasks') {
       immersiveIntentEpoch += 1;
       if (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null) {
         if (!await exitImmersiveDisplay(false)) return;
       }
     }
+    if (focusSequence !== sceneFocusSequence) return;
+    if (outgoingFocusTarget !== null) rememberSceneFocus(outgoingScene, outgoingFocusTarget);
     activeScene = scene;
     await tick();
-    if (focusSequence !== sceneFocusSequence || activeScene !== scene || !restoreSceneFocus) return;
+    if (focusSequence !== sceneFocusSequence || activeScene !== scene || outgoingFocusTarget === null) return;
     const savedTarget = savedSceneFocus(scene);
     if (savedTarget?.isConnected && sceneHost(scene)?.contains(savedTarget)) savedTarget.focus();
     else firstSceneControl(scene)?.focus();
