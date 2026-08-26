@@ -94,6 +94,11 @@
   let pendingStartSessionId: number | null = null;
   let pomodoroSessionEpoch = 0;
   let acceptedPomodoroSessionId: number | null = null;
+  let tasksSceneHost = $state<HTMLElement>();
+  let focusSceneHost = $state<HTMLElement>();
+  let taskSceneFocusTarget: HTMLElement | null = null;
+  let focusSceneFocusTarget: HTMLElement | null = null;
+  let sceneFocusSequence = 0;
   let immersiveIntentEpoch = 0;
   let immersiveEnterFlight: Promise<void> | null = null;
   let immersiveExitFlight: Promise<boolean> | null = null;
@@ -350,7 +355,34 @@
     }
   }
 
+  function sceneHost(scene: AppScene): HTMLElement | undefined {
+    return scene === 'tasks' ? tasksSceneHost : focusSceneHost;
+  }
+
+  function rememberSceneFocus(scene: AppScene): boolean {
+    const host = sceneHost(scene);
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement) || !host?.contains(activeElement)) return false;
+    if (scene === 'tasks') taskSceneFocusTarget = activeElement;
+    else focusSceneFocusTarget = activeElement;
+    return true;
+  }
+
+  function firstSceneControl(scene: AppScene): HTMLElement | null {
+    return sceneHost(scene)?.querySelector<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    ) ?? null;
+  }
+
+  function savedSceneFocus(scene: AppScene): HTMLElement | null {
+    return scene === 'tasks' ? taskSceneFocusTarget : focusSceneFocusTarget;
+  }
+
   async function changeScene(scene: AppScene): Promise<void> {
+    const focusSequence = ++sceneFocusSequence;
+    if (scene === activeScene) return;
+    const outgoingScene = activeScene;
+    const restoreSceneFocus = rememberSceneFocus(outgoingScene);
     if (scene === 'tasks') {
       immersiveIntentEpoch += 1;
       if (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null) {
@@ -358,11 +390,16 @@
       }
     }
     activeScene = scene;
+    await tick();
+    if (focusSequence !== sceneFocusSequence || activeScene !== scene || !restoreSceneFocus) return;
+    const savedTarget = savedSceneFocus(scene);
+    if (savedTarget?.isConnected && sceneHost(scene)?.contains(savedTarget)) savedTarget.focus();
+    else firstSceneControl(scene)?.focus();
   }
 
   function selectFocusTask(taskId: number): void {
     selectedFocusTaskId = taskId;
-    activeScene = 'focus';
+    void changeScene('focus');
   }
 
   function handlePomodoroTasksChanged(unavailableTaskId?: number): void {
@@ -388,7 +425,8 @@
   ): Promise<void> {
     if (isDisposed()) return;
     if (intent.view === 'focus') {
-      activeScene = 'focus';
+      await changeScene('focus');
+      if (isDisposed() || activeScene !== 'focus') return;
       await refreshPomodoro(isDisposed);
       return;
     }
@@ -585,8 +623,8 @@
           return;
         }
 
-        activeScene = 'focus';
-        if (!await refreshPomodoro(isDisposed) || isDisposed()) return;
+        await changeScene('focus');
+        if (isDisposed() || activeScene !== 'focus' || !await refreshPomodoro(isDisposed)) return;
 
         const result = await acknowledgePendingPomodoroActivations(uiRunId, [activation.id]);
         if (isDisposed()) return;
@@ -892,13 +930,20 @@
       snapshot={pomodoroSnapshot}
       busy={pomodoroBusy}
       warning={pomodoroWarning}
-      onOpenFocus={() => { activeScene = 'focus'; }}
+      onOpenFocus={() => { void changeScene('focus'); }}
       onPause={() => { void runPomodoroCommand(pausePomodoro); }}
       onResume={() => { void runPomodoroCommand(resumePomodoro); }}
     />
   {/if}
 
-  {#if activeScene === 'focus'}
+  <div
+    class="scene-host"
+    class:active={activeScene === 'focus'}
+    bind:this={focusSceneHost}
+    hidden={activeScene !== 'focus'}
+    inert={activeScene !== 'focus'}
+    aria-hidden={activeScene !== 'focus' ? 'true' : undefined}
+  >
     <FocusScene
       {tauriAvailable}
       snapshot={pomodoroSnapshot}
@@ -917,9 +962,16 @@
       onReset={() => { void runPomodoroCommand(resetPomodoro); }}
       onUpdateSettings={(input: UpdatePomodoroSettingsInput) => { void runPomodoroCommand(() => updatePomodoroSettings(input)); }}
     />
-  {/if}
+  </div>
 
-  {#if activeScene === 'tasks'}
+  <div
+    class="scene-host"
+    class:active={activeScene === 'tasks'}
+    bind:this={tasksSceneHost}
+    hidden={activeScene !== 'tasks'}
+    inert={activeScene !== 'tasks'}
+    aria-hidden={activeScene !== 'tasks' ? 'true' : undefined}
+  >
     <TaskScene
       {tauriAvailable}
       {initialized}
@@ -932,7 +984,7 @@
       onMutationWarning={handleMutationWarning}
       onActivationResolved={acknowledgeResolvedActivation}
     />
-  {/if}
+  </div>
   {/snippet}
   {#snippet diagnosticsContent()}
   <DiagnosticsDrawer
@@ -957,3 +1009,9 @@
   onCancel={() => pendingStartInput = null}
 />
 {/if}
+
+<style>
+  .scene-host.active {
+    display: contents;
+  }
+</style>

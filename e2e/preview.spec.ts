@@ -103,6 +103,36 @@ test('navigates between tasks and focus with keyboard-reachable, visibly focused
   await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
 });
 
+test('preserves resident task state and focus across a focus round trip', async ({ page }) => {
+  await page.goto('/');
+
+  const navigation = page.getByRole('navigation', { name: '主导航' });
+  const search = page.getByRole('textbox', { name: '搜索任务' });
+  const uniqueSearch = 'resident-task-search-7f31';
+  await search.fill(uniqueSearch);
+  await search.focus();
+  await expect(search).toBeFocused();
+
+  await search.evaluate((element) => {
+    const input = element as HTMLInputElement & { __sceneIdentity?: string };
+    input.__sceneIdentity = 'original-task-search';
+    input.scrollLeft = input.scrollWidth;
+  });
+  const originalScrollLeft = await search.evaluate((element) => element.scrollLeft);
+
+  await navigation.getByRole('button', { name: '专注', exact: true }).click();
+  await expect(page.getByRole('main', { name: '专注场景' })).toBeVisible();
+  await page.getByRole('button', { name: '返回任务' }).click();
+
+  await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
+  await expect(search).toHaveValue(uniqueSearch);
+  await expect(search).toBeFocused();
+  expect(await search.evaluate((element) =>
+    (element as HTMLInputElement & { __sceneIdentity?: string }).__sceneIdentity
+  )).toBe('original-task-search');
+  expect(await search.evaluate((element) => element.scrollLeft)).toBe(originalScrollLeft);
+});
+
 test('shows a centered focus stage and exits visual immersive mode', async ({
   page
 }) => {
