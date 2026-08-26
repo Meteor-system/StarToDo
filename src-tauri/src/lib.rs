@@ -1564,9 +1564,7 @@ fn install_main_window_tracking(app: &AppHandle, window: &WebviewWindow) {
             let _ = save_window_preferences_to_disk(&app_for_events, &preferences);
             return;
         }
-        if preferences.last_immersive {
-            preferences.last_immersive = false;
-        }
+        preferences.last_immersive = false;
         preferences.maximized = window_for_events.is_maximized().unwrap_or(false);
         if !preferences.maximized {
             if let Ok(scale) = window_for_events.scale_factor() {
