@@ -23,6 +23,8 @@ export interface WindowState {
   normalBounds: WindowBounds;
 }
 
+export type FloatingSizeMode = 'capsule' | 'expanded';
+
 export interface FloatingWindowPreferences {
   visible: boolean;
   x: number | null;
@@ -30,6 +32,8 @@ export interface FloatingWindowPreferences {
   width: number;
   height: number;
   alwaysOnTop: boolean;
+  userResized: boolean;
+  displayMode: FloatingSizeMode;
 }
 
 export const getWindowPreferences = (): Promise<WindowPreferences> => invoke('get_window_preferences');
@@ -42,6 +46,12 @@ export const setAlwaysOnTop = (alwaysOnTop: boolean): Promise<void> =>
   invoke('set_always_on_top', { alwaysOnTop });
 export const getFloatingWindowPreferences = (): Promise<FloatingWindowPreferences> =>
   invoke('get_floating_window_preferences');
+export const setFloatingDisplayMode = (
+  mode: FloatingSizeMode
+): Promise<FloatingWindowPreferences> =>
+  invoke<FloatingWindowPreferences>('set_floating_display_mode', { mode });
+export const resetFloatingAutoSize = (): Promise<FloatingWindowPreferences> =>
+  invoke<FloatingWindowPreferences>('reset_floating_auto_size');
 export const showFloatingWindow = (): Promise<void> => invoke('show_floating_window');
 export const hideFloatingWindow = (): Promise<void> => invoke('hide_floating_window');
 export const toggleFloatingWindow = (): Promise<void> => invoke('toggle_floating_window');

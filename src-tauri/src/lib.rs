@@ -91,6 +91,8 @@ struct AppState {
     pomodoro_operation_lock: Mutex<()>,
     immersive_restore_state: Mutex<Option<ImmersiveRestoreState>>,
     pending_floating_intent: Mutex<Option<FloatingIntent>>,
+    floating_window_preferences_lock: Mutex<()>,
+    floating_window_runtime: Mutex<FloatingWindowRuntime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -349,6 +351,24 @@ struct FloatingIntent {
     task_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum FloatingDisplayMode {
+    Capsule,
+    Expanded,
+}
+
+fn default_floating_display_mode() -> FloatingDisplayMode {
+    FloatingDisplayMode::Expanded
+}
+
+fn floating_display_size(mode: FloatingDisplayMode) -> (f64, f64) {
+    match mode {
+        FloatingDisplayMode::Capsule => (340.0, 64.0),
+        FloatingDisplayMode::Expanded => (360.0, 260.0),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FloatingWindowPreferences {
@@ -358,6 +378,10 @@ struct FloatingWindowPreferences {
     width: f64,
     height: f64,
     always_on_top: bool,
+    #[serde(default)]
+    user_resized: bool,
+    #[serde(default = "default_floating_display_mode")]
+    display_mode: FloatingDisplayMode,
 }
 
 impl Default for FloatingWindowPreferences {
@@ -366,10 +390,66 @@ impl Default for FloatingWindowPreferences {
             visible: false,
             x: None,
             y: None,
-            width: 340.0,
-            height: 180.0,
+            width: 360.0,
+            height: 260.0,
             always_on_top: true,
+            user_resized: false,
+            display_mode: FloatingDisplayMode::Expanded,
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct FloatingWindowRuntime {
+    programmatic_target: Option<(u32, u32)>,
+    programmatic_until_unix_ms: u128,
+    programmatic_generation: u64,
+}
+
+fn install_programmatic_resize_target(
+    runtime: &mut FloatingWindowRuntime,
+    target: (u32, u32),
+    deadline: u128,
+) -> u64 {
+    runtime.programmatic_generation = runtime.programmatic_generation.wrapping_add(1);
+    runtime.programmatic_target = Some(target);
+    runtime.programmatic_until_unix_ms = deadline;
+    runtime.programmatic_generation
+}
+
+fn clear_failed_programmatic_resize(
+    runtime: &mut FloatingWindowRuntime,
+    target: (u32, u32),
+    deadline: u128,
+    generation: u64,
+) {
+    if runtime.programmatic_target == Some(target)
+        && runtime.programmatic_until_unix_ms == deadline
+        && runtime.programmatic_generation == generation
+    {
+        runtime.programmatic_target = None;
+        runtime.programmatic_until_unix_ms = 0;
+    }
+}
+
+fn classify_floating_resize(
+    runtime: &mut FloatingWindowRuntime,
+    actual: (u32, u32),
+    now_unix_ms: u128,
+) -> bool {
+    let Some(target) = runtime.programmatic_target else {
+        return true;
+    };
+    if now_unix_ms <= runtime.programmatic_until_unix_ms {
+        if actual == target {
+            runtime.programmatic_target = None;
+            runtime.programmatic_until_unix_ms = 0;
+        }
+        false
+    } else {
+        runtime.programmatic_target = None;
+        runtime.programmatic_until_unix_ms = 0;
+        true
     }
 }
 
@@ -1466,8 +1546,8 @@ fn validate_floating_window_preferences(
     if !(260.0..=800.0).contains(&preferences.width) {
         return Err("floating window width must be between 260 and 800".to_string());
     }
-    if !(120.0..=800.0).contains(&preferences.height) {
-        return Err("floating window height must be between 120 and 800".to_string());
+    if !(56.0..=800.0).contains(&preferences.height) {
+        return Err("floating window height must be between 56 and 800".to_string());
     }
     for coordinate in [preferences.x, preferences.y].into_iter().flatten() {
         if !(-10_000..=10_000).contains(&coordinate) {
@@ -1503,6 +1583,21 @@ fn save_floating_window_preferences_to_disk(
     fs::write(path, content).map_err(string_error)
 }
 
+fn update_floating_window_preferences(
+    app: &AppHandle,
+    update: impl FnOnce(&mut FloatingWindowPreferences),
+) -> Result<FloatingWindowPreferences, String> {
+    let state = app.state::<AppState>();
+    let _guard = state
+        .floating_window_preferences_lock
+        .lock()
+        .map_err(string_error)?;
+    let mut preferences = read_floating_window_preferences(app);
+    update(&mut preferences);
+    save_floating_window_preferences_to_disk(app, &preferences)?;
+    Ok(preferences)
+}
+
 fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
     let window_for_events = window.clone();
     let app_for_events = app.clone();
@@ -1516,25 +1611,64 @@ fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
             return;
         }
 
-        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
-            return;
-        }
-
-        let mut preferences = read_floating_window_preferences(&app_for_events);
-        if let Ok(scale_factor) = window_for_events.scale_factor() {
-            if let Ok(position) = window_for_events.outer_position() {
+        match event {
+            WindowEvent::Moved(position) => {
+                let Ok(scale_factor) = window_for_events.scale_factor() else {
+                    return;
+                };
                 let logical: LogicalPosition<f64> = position.to_logical(scale_factor);
-                preferences.x = Some(logical.x.round() as i32);
-                preferences.y = Some(logical.y.round() as i32);
+                let _ = update_floating_window_preferences(&app_for_events, |preferences| {
+                    preferences.x = Some(logical.x.round() as i32);
+                    preferences.y = Some(logical.y.round() as i32);
+                });
             }
-            if let Ok(size) = window_for_events.inner_size() {
+            WindowEvent::Resized(size) => {
+                let Ok(scale_factor) = window_for_events.scale_factor() else {
+                    return;
+                };
                 let logical: LogicalSize<f64> = size.to_logical(scale_factor);
-                preferences.width = logical.width.round();
-                preferences.height = logical.height.round();
+                let actual = (logical.width.round() as u32, logical.height.round() as u32);
+                let user_resized = {
+                    let state = app_for_events.state::<AppState>();
+                    let Ok(mut runtime) = state.floating_window_runtime.lock() else {
+                        return;
+                    };
+                    classify_floating_resize(&mut runtime, actual, now_unix_ms())
+                };
+                let _ = update_floating_window_preferences(&app_for_events, |preferences| {
+                    preferences.width = f64::from(actual.0);
+                    preferences.height = f64::from(actual.1);
+                    if user_resized {
+                        preferences.user_resized = true;
+                    }
+                });
             }
+            _ => {}
         }
-        let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
     });
+}
+
+fn set_floating_window_size(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let target = (width.round() as u32, height.round() as u32);
+    let deadline = now_unix_ms() + 1_500;
+    let generation = {
+        let state = app.state::<AppState>();
+        let mut runtime = state.floating_window_runtime.lock().map_err(string_error)?;
+        install_programmatic_resize_target(&mut runtime, target, deadline)
+    };
+
+    if let Err(error) = window.set_size(LogicalSize::new(width, height)) {
+        let state = app.state::<AppState>();
+        let mut runtime = state.floating_window_runtime.lock().map_err(string_error)?;
+        clear_failed_programmatic_resize(&mut runtime, target, deadline, generation);
+        return Err(string_error(error));
+    }
+    Ok(())
 }
 
 fn show_floating_window_internal(app: &AppHandle) -> Result<(), String> {
@@ -3232,6 +3366,41 @@ fn get_floating_window_preferences(app: AppHandle) -> FloatingWindowPreferences 
 }
 
 #[tauri::command]
+fn set_floating_display_mode(
+    app: AppHandle,
+    mode: FloatingDisplayMode,
+) -> Result<FloatingWindowPreferences, String> {
+    let preferences = update_floating_window_preferences(&app, |preferences| {
+        preferences.display_mode = mode;
+        if !preferences.user_resized {
+            let (width, height) = floating_display_size(mode);
+            preferences.width = width;
+            preferences.height = height;
+        }
+    })?;
+    if !preferences.user_resized {
+        if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+            set_floating_window_size(&app, &window, preferences.width, preferences.height)?;
+        }
+    }
+    Ok(preferences)
+}
+
+#[tauri::command]
+fn reset_floating_auto_size(app: AppHandle) -> Result<FloatingWindowPreferences, String> {
+    let preferences = update_floating_window_preferences(&app, |preferences| {
+        preferences.user_resized = false;
+        let (width, height) = floating_display_size(preferences.display_mode);
+        preferences.width = width;
+        preferences.height = height;
+    })?;
+    if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+        set_floating_window_size(&app, &window, preferences.width, preferences.height)?;
+    }
+    Ok(preferences)
+}
+
+#[tauri::command]
 fn show_floating_window(app: AppHandle) -> Result<(), String> {
     show_floating_window_internal(&app)
 }
@@ -3381,6 +3550,8 @@ pub fn run() {
                 pomodoro_operation_lock: Mutex::new(()),
                 immersive_restore_state: Mutex::new(None),
                 pending_floating_intent: Mutex::new(None),
+                floating_window_preferences_lock: Mutex::new(()),
+                floating_window_runtime: Mutex::new(FloatingWindowRuntime::default()),
             });
             install_activation_listener(app);
             queue_current_activation(app);
@@ -3457,6 +3628,8 @@ pub fn run() {
             set_main_window_maximized,
             set_always_on_top,
             get_floating_window_preferences,
+            set_floating_display_mode,
+            reset_floating_auto_size,
             show_floating_window,
             hide_floating_window,
             toggle_floating_window,
@@ -3480,6 +3653,101 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_display_modes_have_recommended_sizes() {
+        assert_eq!(
+            floating_display_size(FloatingDisplayMode::Capsule),
+            (340.0, 64.0)
+        );
+        assert_eq!(
+            floating_display_size(FloatingDisplayMode::Expanded),
+            (360.0, 260.0)
+        );
+    }
+
+    #[test]
+    fn legacy_floating_preferences_enable_auto_size() {
+        let preferences = serde_json::from_str::<FloatingWindowPreferences>(
+            r#"{"visible":true,"x":10,"y":20,"width":340,"height":180,"alwaysOnTop":true}"#,
+        )
+        .expect("legacy floating preferences should decode");
+
+        assert!(!preferences.user_resized);
+        assert_eq!(preferences.display_mode, FloatingDisplayMode::Expanded);
+    }
+
+    #[test]
+    fn matching_programmatic_resize_before_deadline_clears_target_without_marking_user() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(!classify_floating_resize(&mut runtime, (340, 64), 1_500));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn intermediate_programmatic_resize_before_deadline_retains_target() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(!classify_floating_resize(&mut runtime, (350, 100), 1_499));
+        assert_eq!(runtime.programmatic_target, Some((340, 64)));
+        assert_eq!(runtime.programmatic_until_unix_ms, 1_500);
+    }
+
+    #[test]
+    fn expired_programmatic_resize_clears_target_and_marks_user() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(classify_floating_resize(&mut runtime, (340, 64), 1_501));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn resize_without_programmatic_target_marks_user() {
+        let mut runtime = FloatingWindowRuntime::default();
+
+        assert!(classify_floating_resize(&mut runtime, (360, 260), 1_000));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn repeated_programmatic_resize_requests_receive_distinct_generations() {
+        let mut runtime = FloatingWindowRuntime::default();
+
+        let first = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+        let second = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+
+        assert_ne!(first, second);
+        assert_eq!(runtime.programmatic_generation, second);
+    }
+
+    #[test]
+    fn failed_older_resize_does_not_clear_newer_identical_target() {
+        let mut runtime = FloatingWindowRuntime::default();
+        let first = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+        let second = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+
+        clear_failed_programmatic_resize(&mut runtime, (340, 64), 1_500, first);
+
+        assert_eq!(runtime.programmatic_target, Some((340, 64)));
+        assert_eq!(runtime.programmatic_until_unix_ms, 1_500);
+        assert_eq!(runtime.programmatic_generation, second);
+    }
 
     #[test]
     fn immersive_restore_bounds_prefer_current_only_when_window_is_normal() {
