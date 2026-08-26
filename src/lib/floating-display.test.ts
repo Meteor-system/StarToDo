@@ -60,6 +60,42 @@ describe('floating display reducer', () => {
     expect(state.collapseAt).toBeNull();
   });
 
+  it('collapses after keyboard-only focus leaves and its deadline expires', () => {
+    let state = createFloatingDisplayState(true, false);
+    state = reduceFloatingDisplay(state, { type: 'focus-in', at: 100 });
+    state = reduceFloatingDisplay(state, { type: 'focus-out', at: 200 });
+
+    expect(state.mode).toBe('interaction-expanded');
+    expect(state.collapseAt).toBe(100 + FLOATING_INTERACTION_MS);
+
+    state = reduceFloatingDisplay(state, {
+      type: 'timeout',
+      at: 100 + FLOATING_INTERACTION_MS
+    });
+    expect(state.mode).toBe('capsule');
+  });
+
+  it('derives interaction state when always-expanded is disabled', () => {
+    let state = createFloatingDisplayState(true, true);
+    state = reduceFloatingDisplay(state, { type: 'pointer-enter', at: 100 });
+    state = reduceFloatingDisplay(state, { type: 'always-expanded', value: false, at: 200 });
+
+    expect(state.mode).toBe('interaction-expanded');
+    expect(state.alwaysExpanded).toBe(false);
+    expect(state.collapseAt).toBeNull();
+  });
+
+  it('updates focus snapshot while pointer remains inside and clears stale deadline', () => {
+    let state = createFloatingDisplayState(true, false);
+    state = reduceFloatingDisplay(state, { type: 'pointer-enter', at: 100 });
+    state = reduceFloatingDisplay(state, { type: 'pointer-leave', at: 200 });
+    state = reduceFloatingDisplay(state, { type: 'snapshot', focusActive: false, at: 300 });
+
+    expect(state.mode).toBe('expanded');
+    expect(state.pointerInside).toBe(false);
+    expect(state.collapseAt).toBeNull();
+  });
+
   it('keeps always-expanded mode independent of focus state', () => {
     let state = createFloatingDisplayState(true, true);
     expect(state.mode).toBe('expanded');
