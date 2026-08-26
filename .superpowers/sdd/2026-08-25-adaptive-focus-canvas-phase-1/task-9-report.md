@@ -107,7 +107,7 @@ Concurrency reasoning:
 
 - Enter→Escape and enter→return tasks: the exit call sees `immersiveEnterFlight`, awaits it, then exits the final system or fallback state before returning. The task scene changes only after that successful exit.
 - Duplicate enter: every caller receives the existing `immersiveEnterFlight`; only its owner calls the Tauri/system or fallback entry.
-- Enter during exit: enter awaits the existing exit. A false exit result aborts entry and retains FocusScene/system. A successful exit is followed by a state recheck before one new entry begins.
+- Enter during exit: enter awaits the existing exit. A false exit result aborts entry and retains FocusScene/system. After a successful exit it rechecks both `activeScene === 'focus'` and display off before one new entry begins, so a task transition that wins during the await cannot be overwritten by queued entry.
 - Duplicate exit: after any enter completes, callers recheck and reuse `immersiveExitFlight`; only one system restore call runs.
 - Late auto-start: successful command plus refresh is insufficient by itself; `activeScene === 'focus'` is also required before entry.
 - Floating task intent: awaiting the same scene-change/exit path prevents task activation on exit failure or disposal.
@@ -125,7 +125,7 @@ Concurrency reasoning:
 - Ruling: command success belongs to command result plus successful refresh — the refreshed backend view remains the final authority before auto-immersive — cost if wrong: immersive could open for a start that the UI failed to reconcile.
 - Ruling: keep all secondary focus context in one ContextDrawer — it preserves one task/settings draft and command authority while keeping the stage centered — cost if wrong: duplicated draft state or unclipped document overflow could emerge.
 - Ruling: guard pending starts with a current-session transition epoch and captured session identity — same-session refresh is harmless, while any accepted identity transition invalidates the old prompt — cost if wrong: routine polling could cancel valid intent or a stale choice could conflict with another client/session.
-- Ruling: serialize immersive enter and exit bidirectionally — every transition waits for opposing work and reuses same-direction work before mutating display state — cost if wrong: enter/exit races could leave stale fullscreen state or reveal tasks before restoration.
+- Ruling: serialize immersive enter and exit bidirectionally and revalidate focus ownership after opposing work — every transition waits for opposing work, reuses same-direction work, and queued entry must still belong to FocusScene before mutating display state — cost if wrong: a task transition could win an exit yet be overwritten by a stale queued re-entry.
 - Ruling: route every task transition, including floating task intents, through `changeScene('tasks')` — system exit failure must keep FocusScene and prevent activation — cost if wrong: a background intent could bypass the fullscreen restore invariant.
 - Ruling: auto-enter only while the focus scene remains active — command/refresh completion does not preserve the user's earlier navigation intent — cost if wrong: a late start response could force immersive mode over the task scene.
 - Ruling: prompt Escape stops propagation — the topmost modal must cancel only its pending action while the page handler respects child default prevention — cost if wrong: one Escape would cancel the prompt and exit immersive simultaneously.

@@ -227,7 +227,7 @@
       if (immersiveExitFlight !== null) {
         if (!await immersiveExitFlight) return;
       }
-      if (immersiveDisplay !== 'off') return;
+      if (activeScene !== 'focus' || immersiveDisplay !== 'off') return;
 
       if (!tauriAvailable) {
         immersiveDisplay = 'visual-fallback';
