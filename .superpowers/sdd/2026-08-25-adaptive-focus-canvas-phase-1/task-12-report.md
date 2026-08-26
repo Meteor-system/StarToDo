@@ -86,13 +86,23 @@
 - Gates: Playwright 33/33 in 19.2 s; frontend units 9 files/86 tests; check 0 errors/0 warnings; Rust fmt-check passed and Rust 86/86 + 0 + 0 passed after rebuilding the known ignored sidecar substrate. Initial Rust attempt is not product RED: fmt-check found the new formatting diff and Cargo build script stopped because the ignored notification-host publish executable was absent.
 - Native GREEN at source head `426d35b`: real Windows drag changed the same mounted expanded WebView from inner 360 x 260 to 480 x 350 with backend width=480,height=350,userResized=true. Running-Pomodoro collapse preserved 480 x 350. Focusing the capsule expanded it with `恢复自动尺寸` visible without reload; keyboard activation restored exact inner 360 x 260, userResized=false, displayMode=expanded, and reset button count 0.
 
+## Controller native checklist reconciliation
+
+- Main window native GREEN: first disposable launch was maximized/non-fullscreen at inner 2560 x 1369 inside the 2560 x 1392 work area with taskbar visible; real user resize clamped exact 520 x 420; normal 960 x 680 at x=260,y=260 survived hide/show, Release/rebuild, and full process restart. Main always-on-top and legacy compact migration remain unchecked.
+- Auto-immersive native GREEN: unset prompted; `保持窗口模式` persisted disabled and started running without fullscreen; `进入并记住` persisted enabled and entered true fullscreen; Escape restored exact normal bounds; diagnostics changed disabled back to unset. Visible exit and command-failure fallback remain unchecked. The combined maximized-or-normal restoration row remains unchecked because maximized restoration was not separately proved.
+- Pomodoro native GREEN: start/pause/resume/skip/restart/reset mutated isolated SQLite with explicit absent-host warnings; running session id 5 survived forced process restart and was then reset.
+- Task native evidence: quick capture created `Task 12 native smoke`; complete showed star feedback and moved focus to `#task-search`; restore succeeded. Only the individual focus/star rows are checked—combined quick-capture/partial-batch and broad CRUD rows remain unchecked.
+- Floating/tray native GREEN: always-expanded persisted through hide/show and process restart; task intent opened Task scene/focused its task action, focus intent opened Focus scene; WM_CLOSE hid floating, wrote visible=false, and kept PID alive. Native UI Automation on the unnamed tray icon and `#32768` menu observed exact labels `Show`, `Focus`, `悬浮窗`, `Hide`, `Release UI`, `Quit`; Show, Hide, Focus, floating toggle, Release, and Quit behaviors passed, with Quit terminating PID/CDP.
+- Notification activation, installed protocol activation, and uninstall product rows remain unchecked.
+- Safety correction: runs used alternate identifiers ending `smoke20260827`, `green20260827`, and `final20260827`; installed app and real data stayed untouched. Isolated startup temporarily changed shared live `startodo:` registration after exact `.reg` backup. Verification accidentally recreated disposable worktree Toolkit AUMID/CLSID/icon once; exact-path Toolkit Uninstall removed them and registry/icon absence was verified. Final protocol byte-equivalent restoration evidence remains pending, so cleanup is not declared complete.
+
 ## Windows smoke
 
 - Environment observed: Windows 11 Pro 10.0.26200 build 26200, 64-bit; one active 2560 x 1440 AOC display at 180 Hz and 100%/96 DPI; NVIDIA RTX 3060.
 - Read-only installed-app evidence: stopped `D:\Program Files\StarToDo\StarToDo.exe`, version 0.1.2, size 14,196,224 bytes; real roaming and local user-data directories exist.
 - Read-only protocol evidence: `startodo:` points to `"D:\Code\Rust\StarToDo\src-tauri\target\debug\startodo.exe" "%1"`.
 - Checked checklist items are limited to executable browser-observable UI/fallback/planner/floating behavior. Every checked item has concrete evidence in `docs/testing/adaptive-focus-canvas-windows-smoke.md`.
-- Installed-app launch, protocol activation, notifications, native window/tray/fullscreen, installer execution, upgrade, and uninstall remain unchecked. No disposable Sandbox/VM exists; startup calls `register_all` and uses the live identifier/data authority. The installed app/user data/registration were not mutated.
+- Installed-app protocol activation, notification activation, installer execution, upgrade, and uninstall remain unchecked. Native window/tray/fullscreen were exercised only through disposable identities. Installed app and real data were not mutated; shared `startodo:` registration was temporarily changed after exact backup and awaits controller evidence of byte-equivalent restoration.
 
 ## Rulings
 
