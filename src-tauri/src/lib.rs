@@ -453,6 +453,10 @@ fn classify_floating_resize(
     }
 }
 
+fn floating_focus_event(focused: bool) -> Option<&'static str> {
+    (!focused).then_some("floating-window-focus-lost")
+}
+
 fn string_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -1660,6 +1664,11 @@ fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
         }
 
         match event {
+            WindowEvent::Focused(focused) => {
+                if let Some(event_name) = floating_focus_event(*focused) {
+                    let _ = app_for_events.emit(event_name, ());
+                }
+            }
             WindowEvent::Moved(position) => {
                 let Ok(scale_factor) = window_for_events.scale_factor() else {
                     return;
@@ -3751,6 +3760,15 @@ mod tests {
                 MainWindowPlacementStep::SetNormalPosition,
                 MainWindowPlacementStep::LeaveNormal,
             ]
+        );
+    }
+
+    #[test]
+    fn only_native_floating_deactivation_routes_focus_loss() {
+        assert_eq!(floating_focus_event(true), None);
+        assert_eq!(
+            floating_focus_event(false),
+            Some("floating-window-focus-lost")
         );
     }
 

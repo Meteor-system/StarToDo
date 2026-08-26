@@ -92,6 +92,7 @@
   let unlistenTasks: (() => void) | undefined;
   let unlistenPomodoro: (() => void) | undefined;
   let unlistenFloatingPreferences: (() => void) | undefined;
+  let unlistenFloatingFocusLost: (() => void) | undefined;
   let runtimeInitialized = false;
   let clockTimer: ReturnType<typeof window.setInterval> | undefined;
   let tasksTimer: ReturnType<typeof window.setInterval> | undefined;
@@ -390,7 +391,7 @@
     dispatchFloating({ type: 'focus-out', at: Date.now() });
   }
 
-  function handleWindowBlur(): void {
+  function releaseFocusOwnership(): void {
     pendingFocusRestore = null;
     ++focusRestoreSequence;
     dispatchFloating({ type: 'focus-out', at: Date.now() });
@@ -424,6 +425,13 @@
         if (disposed) unlisten(); else unlistenTasks = unlisten;
       } catch (error) {
         if (!disposed) tasksWarning = `任务变更监听失败，已改用定期刷新：${errorMessage(error)}`;
+      }
+
+      try {
+        const unlisten = await listen('floating-window-focus-lost', releaseFocusOwnership);
+        if (disposed) unlisten(); else unlistenFloatingFocusLost = unlisten;
+      } catch (error) {
+        if (!disposed) sizeWarning = `悬浮窗焦点监听失败：${errorMessage(error)}`;
       }
 
       try {
@@ -463,7 +471,6 @@
     document.body.style.minWidth = '0';
     document.body.style.overflow = 'hidden';
 
-    window.addEventListener('blur', handleWindowBlur);
     scheduleCollapse();
     requestSizeSync(floatingSizeMode(display.mode));
     clockTimer = window.setInterval(() => { nowUnixMs = Date.now(); }, 1_000);
@@ -472,7 +479,6 @@
 
   onDestroy(() => {
     disposed = true;
-    window.removeEventListener('blur', handleWindowBlur);
     pendingFocusRestore = null;
     ++focusRestoreSequence;
     ++taskRefreshSequence;
@@ -484,6 +490,7 @@
     unlistenTasks?.();
     unlistenPomodoro?.();
     unlistenFloatingPreferences?.();
+    unlistenFloatingFocusLost?.();
     if (previousHtmlMinWidth !== undefined) document.documentElement.style.minWidth = previousHtmlMinWidth;
     if (previousHtmlOverflow !== undefined) document.documentElement.style.overflow = previousHtmlOverflow;
     if (previousBodyMinWidth !== undefined) document.body.style.minWidth = previousBodyMinWidth;

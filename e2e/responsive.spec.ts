@@ -163,7 +163,7 @@ async function installActiveFloatingTauriMock(page: Page): Promise<void> {
           if (command === 'plugin:event|listen') {
             const eventName = args.event as string;
             const handler = callbacks.get(args.handler as number);
-            if (eventName === 'floating-window-preferences-changed' && handler) {
+            if ((eventName === 'floating-window-preferences-changed' || eventName === 'floating-window-focus-lost') && handler) {
               window.addEventListener(eventName, (event) => handler({ event: eventName, id: 1, payload: (event as CustomEvent).detail }));
             }
             return 1;
@@ -248,7 +248,7 @@ test('keyboard focus inside keeps the active companion expanded past its deadlin
   await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
 });
 
-test('window blur releases keyboard focus ownership after the interaction buffer', async ({ page }) => {
+test('native floating deactivation releases keyboard focus ownership after the interaction buffer', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-08-27T12:00:00+08:00') });
   await installActiveFloatingTauriMock(page);
   await page.setViewportSize({ width: 340, height: 64 });
@@ -265,7 +265,7 @@ test('window blur releases keyboard focus ownership after the interaction buffer
   await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
   await expect(focusedTarget).toBeFocused();
 
-  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('floating-window-focus-lost')));
   await expect(focusedTarget).toBeFocused();
   await page.clock.fastForward(699);
   await page.clock.fastForward(1);
