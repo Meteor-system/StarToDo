@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import type { ReminderReport } from '$lib/tasks';
+  import { enterImmersiveMode, exitImmersiveMode, setMainWindowMaximized, setAlwaysOnTop } from '$lib/windowing';
 
   type WindowMode = 'normal' | 'maximized' | 'fullscreen';
   type ActionKey = 'snapshot' | 'metrics' | 'database' | 'notifications' | 'testNotification' | 'scheduleNotification' | 'cancelNotification' | 'tray' | 'release' | 'alwaysOnTop' | 'windowMode' | 'reminderResync';
@@ -68,7 +69,19 @@
     }
     await run<void>('release', 'release_ui', { listenerToken: reminderWarningListenerToken });
   }
-  async function changeMode(next: WindowMode): Promise<void> { if (next === mode) return; const result = await run<void>('windowMode', 'set_window_mode', { mode: next }); if (result.ok) onModeChange(next); }
+  async function changeMode(next: WindowMode): Promise<void> {
+    if (next === mode) return;
+    setAction('windowMode', { busy: true, error: null, success: null });
+    try {
+      if (next === 'fullscreen') await enterImmersiveMode();
+      else if (mode === 'fullscreen') await exitImmersiveMode();
+      if (next === 'normal' || next === 'maximized') await setMainWindowMaximized(next === 'maximized');
+      setAction('windowMode', { busy: false, success: '已完成。' });
+      onModeChange(next);
+    } catch (error) {
+      setAction('windowMode', { busy: false, error: message(error) });
+    }
+  }
   async function resyncReminders(): Promise<void> {
     if (!tauriAvailable) {
       setAction('reminderResync', { error: '当前在浏览器预览环境，Tauri 后端不可用。', success: null });
@@ -86,7 +99,7 @@
       setAction('reminderResync', { busy: false, error: message(error) });
     }
   }
-  async function changeAlwaysOnTop(event: Event): Promise<void> { const input = event.currentTarget as HTMLInputElement; const enabled = input.checked; const result = await run<void>('alwaysOnTop', 'set_always_on_top', { alwaysOnTop: enabled }); if (result.ok) alwaysOnTop = enabled; else input.checked = alwaysOnTop; }
+  async function changeAlwaysOnTop(event: Event): Promise<void> { const input = event.currentTarget as HTMLInputElement; const enabled = input.checked; const result = await run<void>('alwaysOnTop', 'set_always_on_top', { alwaysOnTop: enabled }); if (result.ok) { await setAlwaysOnTop(enabled); alwaysOnTop = enabled; } else input.checked = alwaysOnTop; }
 </script>
 
 <details class:compact={false} class="diagnostics">
