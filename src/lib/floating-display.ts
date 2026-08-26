@@ -4,6 +4,7 @@ export type FloatingDisplayMode =
   | 'interaction-expanded';
 
 export type FloatingSizeMode = 'expanded' | 'capsule';
+export type FloatingFocusTarget = 'open-focus' | 'primary' | 'expand';
 
 export interface FloatingDisplayState {
   mode: FloatingDisplayMode;
@@ -124,6 +125,10 @@ export function reduceFloatingDisplay(
     mode: state.alwaysExpanded || !state.focusActive ? 'expanded' : 'capsule',
     collapseAt: null
   };
+}
+
+export function floatingFocusTargetSelector(target: FloatingFocusTarget): string {
+  return `[data-floating-focus-target="${target}"]`;
 }
 
 export function floatingSizeMode(mode: FloatingDisplayMode): FloatingSizeMode {

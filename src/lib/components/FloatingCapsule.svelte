@@ -24,15 +24,15 @@
 
 <div class="capsule" data-tauri-drag-region="deep">
   <span class="star" aria-hidden="true">★</span>
-  <button type="button" class="focus" onclick={onOpenFocus} aria-label="打开专注工作区" data-floating-focus-primary>
+  <button type="button" class="focus" onclick={onOpenFocus} aria-label="打开专注工作区" data-floating-focus-target="open-focus">
     <span class="phase">{phaseLabel}</span>
     <strong>{remainingLabel}</strong>
     <span class="task">{taskTitle ?? '未绑定任务'}</span>
   </button>
-  <button type="button" class="primary" onclick={onPrimary} disabled={busy}>
+  <button type="button" class="primary" onclick={onPrimary} disabled={busy} data-floating-focus-target="primary">
     {busy ? '…' : paused ? '继续' : '暂停'}
   </button>
-  <button type="button" class="expand" onclick={onExpand} aria-label="展开悬浮窗">⌃</button>
+  <button type="button" class="expand" onclick={onExpand} aria-label="展开悬浮窗" data-floating-focus-target="expand">⌃</button>
 </div>
 
 <style>

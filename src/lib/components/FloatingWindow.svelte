@@ -5,9 +5,11 @@
   import FloatingExpandedPanel from '$lib/components/FloatingExpandedPanel.svelte';
   import {
     createFloatingDisplayState,
+    floatingFocusTargetSelector,
     floatingSizeMode,
     reduceFloatingDisplay,
     type FloatingDisplayEvent,
+    type FloatingFocusTarget,
     type FloatingSizeMode
   } from '$lib/floating-display';
   import {
@@ -75,6 +77,8 @@
   let sizeCommandRunning = false;
   let sizeFlushQueued = false;
   let floatingPreferencesReady = false;
+  let pendingFocusRestore: FloatingFocusTarget | null = null;
+  let focusRestoreSequence = 0;
   let previousHtmlMinWidth: string | undefined;
   let previousHtmlOverflow: string | undefined;
   let previousBodyMinWidth: string | undefined;
@@ -114,17 +118,35 @@
   function dispatchFloating(event: FloatingDisplayEvent): void {
     const next = reduceFloatingDisplay(display, event);
     if (next === display) return;
-    const restoreFocus = display.focusInside && event.type !== 'focus-out';
     display = next;
     scheduleCollapse();
     requestSizeSync(floatingSizeMode(next.mode));
-    if (restoreFocus) void restoreLogicalFocus();
   }
 
-  async function restoreLogicalFocus(): Promise<void> {
+  function focusTargetFromEvent(event: FocusEvent): FloatingFocusTarget | null {
+    if (!(event.target instanceof HTMLElement)) return null;
+    const target = event.target.closest<HTMLElement>('[data-floating-focus-target]');
+    const value = target?.dataset.floatingFocusTarget;
+    return value === 'open-focus' || value === 'primary' || value === 'expand' ? value : null;
+  }
+
+  function handleFocusIn(event: FocusEvent): void {
+    const target = focusTargetFromEvent(event);
+    if (display.mode === 'capsule' && target !== null) {
+      pendingFocusRestore = target;
+      const sequence = ++focusRestoreSequence;
+      dispatchFloating({ type: 'focus-in', at: Date.now() });
+      void restoreLogicalFocus(target, sequence);
+      return;
+    }
+    dispatchFloating({ type: 'focus-in', at: Date.now() });
+  }
+
+  async function restoreLogicalFocus(target: FloatingFocusTarget, sequence: number): Promise<void> {
     await tick();
-    if (disposed || root.contains(document.activeElement)) return;
-    root.querySelector<HTMLElement>('[data-floating-focus-primary]')?.focus();
+    if (disposed || sequence !== focusRestoreSequence) return;
+    root.querySelector<HTMLElement>(floatingFocusTargetSelector(target))?.focus();
+    if (sequence === focusRestoreSequence) pendingFocusRestore = null;
   }
 
   function acceptSnapshot(nextSnapshot: PomodoroSnapshot): void {
@@ -284,6 +306,7 @@
   }
 
   function handleFocusOut(event: FocusEvent): void {
+    if (pendingFocusRestore !== null) return;
     if (event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) return;
     dispatchFloating({ type: 'focus-out', at: Date.now() });
   }
@@ -368,7 +391,7 @@
   data-display-mode={display.mode}
   onpointerenter={() => dispatchFloating({ type: 'pointer-enter', at: Date.now() })}
   onpointerleave={() => dispatchFloating({ type: 'pointer-leave', at: Date.now() })}
-  onfocusin={() => dispatchFloating({ type: 'focus-in', at: Date.now() })}
+  onfocusin={handleFocusIn}
   onfocusout={handleFocusOut}
 >
   <div class="panel" class:capsule={display.mode === 'capsule'}>

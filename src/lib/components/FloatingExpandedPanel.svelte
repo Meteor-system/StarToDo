@@ -62,16 +62,16 @@
 
 <div class="expanded-panel" data-tauri-drag-region="deep">
   <header>
-    <button type="button" class="timer" onclick={onOpenFocus} aria-label="打开专注工作区" data-floating-focus-primary>
+    <button type="button" class="timer" onclick={onOpenFocus} aria-label="打开专注工作区" data-floating-focus-target="open-focus">
       <span class="phase">{phaseLabel}</span>
       <strong>{remainingLabel}</strong>
       <span class="status">{statusLabel} · {taskTitle ?? '未绑定任务'}</span>
     </button>
     <div class="actions">
-      <button type="button" class="primary" onclick={onPrimary} disabled={busy}>
+      <button type="button" class="primary" onclick={onPrimary} disabled={busy} data-floating-focus-target="primary">
         {busy ? '…' : focusActive ? (statusLabel === '已暂停' ? '继续' : '暂停') : `开始${phaseLabel}`}
       </button>
-      <button type="button" onclick={onHide} aria-label="隐藏悬浮窗">×</button>
+      <button type="button" onclick={onHide} aria-label="隐藏悬浮窗" data-floating-focus-target="expand">×</button>
     </div>
   </header>
 

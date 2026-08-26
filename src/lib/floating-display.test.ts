@@ -4,6 +4,7 @@ import {
   FLOATING_INTERACTION_MS,
   FLOATING_LEAVE_BUFFER_MS,
   createFloatingDisplayState,
+  floatingFocusTargetSelector,
   floatingSizeMode,
   reduceFloatingDisplay
 } from './floating-display';
@@ -106,6 +107,12 @@ describe('floating display reducer', () => {
       at: 100
     });
     expect(state.mode).toBe('expanded');
+  });
+
+  it('maps capsule focus targets to stable expanded controls', () => {
+    expect(floatingFocusTargetSelector('open-focus')).toBe('[data-floating-focus-target="open-focus"]');
+    expect(floatingFocusTargetSelector('primary')).toBe('[data-floating-focus-target="primary"]');
+    expect(floatingFocusTargetSelector('expand')).toBe('[data-floating-focus-target="expand"]');
   });
 
   it('maps interaction-expanded to the expanded outer size', () => {
