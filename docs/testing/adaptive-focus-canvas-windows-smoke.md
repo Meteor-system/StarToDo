@@ -2,7 +2,7 @@
 
 ## Environment
 
-- Tested Task 12 source/evidence range: `6416e303ec5ce37d47e64ce6b9d241bb5932327d..911393832edb3dfd4b6940f4d0e587da3649dbad` (initial evidence `439473866cf4bfa11bcef5c677ff5f61a99ec5b0`, non-vacuous scroll follow-up `911393832edb3dfd4b6940f4d0e587da3649dbad`); fix-round-1 test/doc changes are recorded by the later commit containing this document.
+- Evidence revision map: browser baseline and non-vacuous-scroll evidence spans frozen base `6416e303ec5ce37d47e64ce6b9d241bb5932327d` through `911393832edb3dfd4b6940f4d0e587da3649dbad`; normal-placement source is `7ed7c31`, implicit-exit source is `845ae4c`, Pomodoro-warning source is `0219278`, and final warning/manual-resize native evidence used source `426d35b`; corrected native focus-loss plus final immersive/always-on-top binary source is `74386aa`; final Task 12 documentation-only reconciliation head before this correction is `919ef9f`. No production source changed after `74386aa` before this documentation fix.
 - Windows version: Windows 11 Pro 10.0.26200 build 26200, 64-bit.
 - Display scale: 100% (96 DPI), supplied runtime fact; registry `Win8DpiScaling=0` was observed, while `LogPixels` was unset.
 - Monitor layout: one active AOC2702 display, 2560 x 1440 at 180 Hz on NVIDIA GeForce RTX 3060; supplied runtime fact says one active monitor.
