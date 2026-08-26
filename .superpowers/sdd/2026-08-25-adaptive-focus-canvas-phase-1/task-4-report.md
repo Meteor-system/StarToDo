@@ -72,3 +72,19 @@ Verification:
 Concern: no dedicated frontend test runner exists for this Svelte component; `npm run check` provides compile-level coverage.
 
 Follow-up commit: `Fix duplicate always-on-top invocation`
+
+## Fix Round 1 Rust refreshed-bound follow-up
+
+The immersive entry path now refreshes actual normal-window geometry before entering fullscreen whenever the current window is neither maximized nor fullscreen. Physical position and size are converted to logical coordinates using the window scale factor, while persisted bounds remain authoritative for maximized/fullscreen states. Added a pure conversion regression test.
+
+Verification:
+
+- `cargo test --manifest-path src-tauri/Cargo.toml physical_window_bounds -- --nocapture` — 1 passed, 0 failed.
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` — passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture` — 2 passed, 0 failed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 74 passed, 0 failed.
+- `npm run check` — passed with 0 errors and 0 warnings.
+
+Self-review: capture remains before `set_fullscreen(true)` and runtime restore state is written only after fullscreen succeeds. No Pomodoro, reminder, activation, tray, or UI-release state is touched. Concern: Tauri window APIs cannot be integration-tested without a live desktop window; the conversion helper test covers scale conversion and command compilation covers API usage.
+
+Rust follow-up commit: `Implement refreshed immersive bounds capture`

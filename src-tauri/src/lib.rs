@@ -225,6 +225,26 @@ struct WindowBounds {
     height: u32,
 }
 
+impl WindowBounds {
+    fn from_physical(
+        position: Option<tauri::PhysicalPosition<i32>>,
+        size: tauri::PhysicalSize<u32>,
+        scale_factor: f64,
+    ) -> Self {
+        let scale = if scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
+        Self {
+            x: position.map(|value| (value.x as f64 / scale).round() as i32),
+            y: position.map(|value| (value.y as f64 / scale).round() as i32),
+            width: (size.width as f64 / scale).round() as u32,
+            height: (size.height as f64 / scale).round() as u32,
+        }
+    }
+}
+
 impl Default for WindowBounds {
     fn default() -> Self {
         Self {
@@ -3104,9 +3124,17 @@ fn enter_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<Wi
     if fullscreen {
         return current_window_state(&app);
     }
+    let normal_bounds = if !maximized && !fullscreen {
+        let size = window.inner_size().map_err(string_error)?;
+        let position = window.outer_position().map_err(string_error).ok();
+        let scale_factor = window.scale_factor().map_err(string_error)?;
+        WindowBounds::from_physical(position, size, scale_factor)
+    } else {
+        preferences.normal_bounds.clone()
+    };
     let restore = ImmersiveRestoreState {
         maximized,
-        normal_bounds: preferences.normal_bounds.clone(),
+        normal_bounds,
     };
     window.set_fullscreen(true).map_err(string_error)?;
     *state.immersive_restore_state.lock().map_err(string_error)? = Some(restore);
@@ -3437,6 +3465,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_window_bounds_convert_to_logical_coordinates() {
+        let bounds = WindowBounds::from_physical(
+            Some(tauri::PhysicalPosition::new(60, 80)),
+            tauri::PhysicalSize::new(1800, 1400),
+            2.0,
+        );
+        assert_eq!(
+            bounds,
+            WindowBounds {
+                x: Some(30),
+                y: Some(40),
+                width: 900,
+                height: 700
+            }
+        );
+    }
 
     #[test]
     fn immersive_restore_prefers_maximized() {
