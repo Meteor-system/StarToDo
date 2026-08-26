@@ -3570,6 +3570,10 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn should_prevent_exit(code: Option<i32>) -> bool {
+    code.is_none()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3699,13 +3703,27 @@ pub fn run() {
             reset_pomodoro,
             list_pomodoro_task_summaries
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running StarToDo");
+        .build(tauri::generate_context!())
+        .expect("error while building StarToDo")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if should_prevent_exit(code) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn implicit_last_window_exit_is_prevented_but_explicit_exit_is_allowed() {
+        assert!(should_prevent_exit(None));
+        assert!(!should_prevent_exit(Some(0)));
+        assert!(!should_prevent_exit(Some(7)));
+    }
 
     #[test]
     fn maximized_startup_seeds_normal_placement_before_final_maximize() {

@@ -69,7 +69,7 @@
 - [ ] Tray Focus queues the focus scene intent. Blocker: requires native tray/backend interaction.
 - [ ] Tray 悬浮窗 toggles the floating window. Blocker: requires native tray/window interaction.
 - [ ] Tray Hide works. Blocker: requires native tray/window interaction.
-- [ ] Tray Release UI destroys and safely recreates the main UI. Blocker: requires native WebView lifecycle interaction.
+- [ ] Tray Release UI destroys and safely recreates the main UI. Blocker: controller isolated-native RED at real 520 x 420 closed the warning toast, keyboard-opened diagnostics, and invoked real `释放 UI`; CDP closed and the command returned, but disposable PID 91492 exited completely. Relaunch created new long-lived PID 134064 instead of rebuilding a WebView in the original process. The pending source fix prevents implicit no-code last-window exit while allowing explicit coded Quit, but same-PID recreation/bounds restoration requires controller rebuild and isolated rerun.
 - [ ] Tray Quit exits the process. Blocker: requires native tray/process interaction.
 - [ ] Task notification activation works. Blocker: notification registration and real user data could not be mutated safely.
 - [ ] Pomodoro notification activation works. Blocker: notification registration and native SQLite state could not be mutated safely.
@@ -81,6 +81,7 @@
 - Controller safety evidence: debug build used disposable identifier `com.aidotnet.startodo.adaptivefocuscanvas.smoke20260827`, both generated notification hosts were disabled, runtime database path was verified under the disposable identifier before interaction, the installed app/real data were untouched, and the live protocol registration was backed up for exact restoration.
 - Native RED: first launch reported preferences `normalBounds=960x680`, `maximized=true`; actual maximized inner size was 2560 x 1369, `fullscreen=false`, with 2560 x 1392 work area/taskbar visible. Real `set_main_window_maximized(false)` plus 500 ms returned `maximized=false`, but actual inner remained 2560 x 1369 and outer became 2576 x 1408 at x=286,y=286; tracking then persisted this monitor-sized off-screen normal bound.
 - Root cause/fix state: maximized startup previously skipped applying stored/default normal size and position, so Windows had no restore placement before maximize and later unmaximize exposed/persisted the maximized-sized placement. The pending source fix applies `unmaximize -> normal size -> normal position -> final maximize` before tracking is installed, including UI rebuild ordering. Rust placement-plan regression and implementation gates pass; native GREEN is explicitly pending the controller’s isolated rebuild/rerun.
+- Second native RED — UI Release: disposable PID 91492 with isolated DB and disabled host exited after real `释放 UI` destroyed the last WebView; starting the same binary created PID 134064 instead of second-instance recreation in PID 91492. Root cause/fix state: the convenience runner did not intercept implicit `RunEvent::ExitRequested { code: None }`. The pending runner now prevents only no-code implicit exit; tray `app.exit(0)` remains allowed. Pure exit-policy and Rust gates pass, but original-PID survival, no-main-window state, same-PID second-instance WebView recreation, and restored bounds remain pending controller native GREEN.
 
 ## Read-only native and installer observations
 
