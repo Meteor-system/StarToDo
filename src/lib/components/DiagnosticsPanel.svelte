@@ -99,7 +99,24 @@
       setAction('reminderResync', { busy: false, error: message(error) });
     }
   }
-  async function changeAlwaysOnTop(event: Event): Promise<void> { const input = event.currentTarget as HTMLInputElement; const enabled = input.checked; const result = await run<void>('alwaysOnTop', 'set_always_on_top', { alwaysOnTop: enabled }); if (result.ok) { await setAlwaysOnTop(enabled); alwaysOnTop = enabled; } else input.checked = alwaysOnTop; }
+  async function changeAlwaysOnTop(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const enabled = input.checked;
+    if (!tauriAvailable) {
+      setAction('alwaysOnTop', { error: '当前在浏览器预览环境，Tauri 后端不可用。', success: null });
+      input.checked = alwaysOnTop;
+      return;
+    }
+    setAction('alwaysOnTop', { busy: true, error: null, success: null });
+    try {
+      await setAlwaysOnTop(enabled);
+      setAction('alwaysOnTop', { busy: false, success: '已完成。' });
+      alwaysOnTop = enabled;
+    } catch (error) {
+      setAction('alwaysOnTop', { busy: false, error: message(error) });
+      input.checked = alwaysOnTop;
+    }
+  }
 </script>
 
 <details class:compact={false} class="diagnostics">

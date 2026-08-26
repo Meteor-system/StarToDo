@@ -56,3 +56,19 @@ Only `src/lib/components/DiagnosticsPanel.svelte` was staged for this fix round;
 ### Fix commit
 
 `d7ddea47922d07d5e82b024067497e0b8d64bae0` — `Fix diagnostics immersive window controls`
+
+## Fix Round 1 follow-up: always-on-top duplicate invocation
+
+Self-review identified that `changeAlwaysOnTop` called the generic `run(..., 'set_always_on_top', ...)` helper and then called `setAlwaysOnTop` again on success, causing two backend invocations. The handler now uses exactly one `setAlwaysOnTop(enabled)` wrapper call while preserving browser-unavailable handling, busy state, success state, error reporting, and checkbox rollback.
+
+Verification:
+
+- `npm run check` — passed with 0 errors and 0 warnings.
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` — passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture` — 2 passed, 0 failed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 73 passed, 0 failed.
+- Source inspection confirms `changeAlwaysOnTop` contains one `setAlwaysOnTop` invocation and no nested generic command call.
+
+Concern: no dedicated frontend test runner exists for this Svelte component; `npm run check` provides compile-level coverage.
+
+Follow-up commit: `Fix duplicate always-on-top invocation`
