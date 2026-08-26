@@ -65,7 +65,8 @@
 - Root cause: the shared toast always exposes dismissal UI, but the Pomodoro warning omitted its callback. Reusing one permanent `pomodoro:warning` dismissal key would also suppress all later warnings.
 - E2E TDD: fixture setup iterations exposed selector and required-command assumptions before reaching the behavior. Valid RED exited 1 because warning A remained attached after `关闭通知`. GREEN injects A, dismisses it, proves A’s toast remains absent, then injects distinct B and proves B appears; focused 1/1 passed in 8.3 s with browser-error hooks active.
 - Minimal fix: warning text participates in the Pomodoro toast ID, `dismissedToastIds` is consulted, and `onDismiss` is supplied. Dismissing A does not swallow B. Backend/Pomodoro persistence is unchanged.
-- Gates: full Playwright 31/31 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings. Controller native retest of the close control remains pending; no native GREEN is claimed for this third finding.
+- Gates: full Playwright 31/31 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings.
+- Native GREEN: controller retested source head `426d35b`, binary SHA-256 `A88473D649D8B16DC32ADF37FE3099474EE650625A638D2E8C1623BA12FBC283`, with sidecar absent. Closing the Pomodoro warning detached that toast; only the independent reminder-reconciliation toast remained. Native distinct-B is deliberately not claimed because all host-absent mutation paths early-return the same inventory warning; distinct warning recurrence remains browser-E2E authority.
 
 ## Fourth native Important — floating WebView deactivation
 
@@ -82,7 +83,8 @@
 - Root cause: Rust resize tracking persisted every resize but published no authoritative observation. The frontend had no resize/preference listener, so backend manual ownership and live UI state diverged.
 - TDD: mounted E2E valid RED exited 1 because an authoritative manual-resize update did not render the reset button. Size-sync policy valid RED was one TypeError for missing `acceptFloatingPreferencesObservation`. GREEN starts with no reset button, delivers 480 x 350/userResized=true in the same page, observes the button, invokes reset, then proves expanded 360 x 260/userResized=false and button disappearance. Focused E2E 1/1 in 8.6 s; policy 18/18.
 - Minimal bounded path: backend emits `floating-window-preferences-changed` only when `classify_floating_resize` says the native event is genuinely user-owned; programmatic auto-size events remain silent and cannot claim ownership. Frontend feeds payloads through a size-sync observation reducer that rejects them while any set/reset intent or generation is pending, preserving Task 11 ABA/stale-response invariants.
-- Gates: Playwright 33/33 in 19.2 s; frontend units 9 files/86 tests; check 0 errors/0 warnings; Rust fmt-check passed and Rust 86/86 + 0 + 0 passed after rebuilding the known ignored sidecar substrate. Initial Rust attempt is not product RED: fmt-check found the new formatting diff and Cargo build script stopped because the ignored notification-host publish executable was absent. Controller native drag/reset retest remains pending.
+- Gates: Playwright 33/33 in 19.2 s; frontend units 9 files/86 tests; check 0 errors/0 warnings; Rust fmt-check passed and Rust 86/86 + 0 + 0 passed after rebuilding the known ignored sidecar substrate. Initial Rust attempt is not product RED: fmt-check found the new formatting diff and Cargo build script stopped because the ignored notification-host publish executable was absent.
+- Native GREEN at source head `426d35b`: real Windows drag changed the same mounted expanded WebView from inner 360 x 260 to 480 x 350 with backend width=480,height=350,userResized=true. Running-Pomodoro collapse preserved 480 x 350. Focusing the capsule expanded it with `恢复自动尺寸` visible without reload; keyboard activation restored exact inner 360 x 260, userResized=false, displayMode=expanded, and reset button count 0.
 
 ## Windows smoke
 
