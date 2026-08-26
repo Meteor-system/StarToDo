@@ -129,12 +129,17 @@ for (const viewport of [
 }
 
 test.describe('focus reduced motion', () => {
-  test.use({ reducedMotion: 'reduce' });
-
   test('focus layout remains compatible without breathing animation', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 520, height: 420 });
     await openFocus(page);
-    await expect(page.locator('.focus-ring-core')).toHaveCSS('animation-name', 'none');
+    expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
+    await page.locator('.focus-ring').evaluate((element) => {
+      element.classList.add('running');
+      element.setAttribute('data-force-running', 'true');
+    });
+    await expect(page.locator('.focus-ring')).toHaveClass(/running/);
+    await expect(page.locator('.focus-ring > .focus-ring-core')).toHaveCSS('animation-name', 'none');
     const measurements = await focusMeasurements(page);
     expect(measurements.document.width).toBeLessThanOrEqual(measurements.viewport.width);
     expect(measurements.document.height).toBeLessThanOrEqual(measurements.viewport.height);

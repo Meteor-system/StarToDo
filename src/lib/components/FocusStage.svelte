@@ -152,7 +152,7 @@
 
   button.primary {
     border-color: var(--accent);
-    color: #25110b;
+    color: var(--accent-ink);
     background: var(--accent);
     font-weight: 650;
   }
@@ -191,7 +191,8 @@
     box-shadow: inset 0 0 36px rgb(0 0 0 / 0.18);
   }
 
-  .focus-ring.running .focus-ring-core {
+  .focus-ring.running .focus-ring-core,
+  :global(.focus-ring[data-force-running="true"]) .focus-ring-core {
     animation: focus-breathe 3.2s ease-in-out infinite;
   }
 
@@ -238,8 +239,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .focus-ring.running .focus-ring-core {
-      animation: none;
+    .focus-ring-core {
+      animation: none !important;
     }
   }
 </style>

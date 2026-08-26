@@ -144,7 +144,7 @@
     </div>
     <div class="scene-actions">
       <button type="button" onclick={() => void onReturnToTasks()}>返回任务</button>
-      <button type="button" aria-controls="focus-context-drawer" onclick={() => contextOpen = true}>专注上下文</button>
+      <button type="button" aria-controls="focus-context-drawer" aria-expanded={contextOpen} onclick={() => contextOpen = true}>专注上下文</button>
       {#if immersive}
         <button type="button" class="primary" onclick={() => void onExitImmersive()}>退出沉浸</button>
       {:else}
@@ -243,7 +243,7 @@
   h2 { margin: 4px 0 0; font-size: clamp(18px, 3vw, 25px); }
   .scene-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
   button { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 10px; color: var(--muted); background: transparent; font-size: 12px; }
-  button.primary { border-color: var(--accent); color: #25110b; background: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
   button:disabled { cursor: not-allowed; opacity: 0.48; }
   .notices { min-height: 0; }
   .browser-notice,

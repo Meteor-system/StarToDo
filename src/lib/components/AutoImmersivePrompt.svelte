@@ -128,7 +128,7 @@
   p { color: var(--text-soft); font-size: 13px; line-height: 1.65; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
   button { border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 8px 11px; color: var(--text-soft); background: transparent; }
-  button.primary { border-color: var(--accent); color: #25110b; background: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
 
   @media (max-width: 420px) {
     .prompt-backdrop { align-items: end; padding: 12px; }

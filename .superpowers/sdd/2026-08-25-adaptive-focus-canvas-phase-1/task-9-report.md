@@ -1,6 +1,6 @@
 # Task 9 Report
 
-Status: implemented, verified, independently reviewed, and ready for the scoped Task 9 commit.
+Status: implemented, verified, independently reviewed, controller follow-up fixed, and committed in two scoped Task 9 commits.
 
 ## Scope and overlap disclosure
 
@@ -82,6 +82,36 @@ Fixes applied:
 
 The review's broad request for controllable Tauri command-response integration tests cannot be implemented honestly in browser preview without introducing a second backend authority or expanding the authorized file list. The browser tests cover manual fallback, Escape off, centering, document containment, resident controls, reduced motion, and console errors. The Tauri-only system entry/exit failure branches remain bounded verification Minors for desktop smoke/integration coverage.
 
+## Controller review follow-up
+
+The controller review found two valid Important defects and three bounded Minors after commit `4ef5783490550eca65ef002e257f6e347118c1ed`.
+
+Fixes applied:
+
+- Floating task intents now call and await `changeScene('tasks')`. They recheck disposal and that the task scene actually became active before revealing or activating the task. A failed system exit therefore leaves FocusScene/system authoritative. Floating focus intents remain a direct focus transition plus refresh and never auto-enter immersive.
+- Added one `immersiveEnterFlight` and coordinated it bidirectionally with `immersiveExitFlight`. Duplicate enters reuse one promise. Enter waits for an existing exit and aborts when that exit fails. Exit waits for an existing enter, rechecks the exit single-flight slot, then performs exactly one system/fallback/off exit. Task navigation and Escape treat an enter flight as immersive work. Auto-start enters immersive only when its command/refresh succeeds and the active scene is still focus.
+- Replaced accepted-view generation with a current-session transition epoch. `acceptPomodoroSnapshot()` is the sole snapshot acceptance path for command results and refreshed views, and increments the epoch only when `currentSession?.id` changes. A harmless same-session refresh preserves a prompt; null→id, id→another id, and id→null transitions invalidate it.
+- Added `aria-expanded` to the focus-context trigger and replaced Task 9 hardcoded primary-button ink with `var(--accent-ink)`.
+- Added browser visual-fallback → task transition coverage.
+- Made reduced-motion evidence non-vacuous: the test explicitly emulates reduced motion, confirms the media query, forces the ring through a running selector, and then verifies the ring core computes `animation-name: none`. This uncovered and fixed a scoped CSS reduced-motion defect.
+
+Fresh follow-up verification:
+
+- `npm run check`: PASS, 0 errors and 0 warnings.
+- `npm run test:unit`: PASS, 7 test files and 62 tests.
+- Direct focused E2E `centered focus stage|focus layout|navigates between tasks and focus|returns from browser visual immersive mode`: PASS, 7 tests.
+- New transition/motion RED: visual-fallback task transition already passed against the prior implementation; the non-vacuous reduced-motion test failed with computed `focus-breathe` until the CSS override and explicit emulation were corrected.
+- Static race audit found both flights, bidirectional awaits, task transition routing, active-scene auto-enter guard, centralized snapshot acceptance, and no obsolete generation names or hardcoded Task 9 primary ink.
+
+Concurrency reasoning:
+
+- Enter→Escape and enter→return tasks: the exit call sees `immersiveEnterFlight`, awaits it, then exits the final system or fallback state before returning. The task scene changes only after that successful exit.
+- Duplicate enter: every caller receives the existing `immersiveEnterFlight`; only its owner calls the Tauri/system or fallback entry.
+- Enter during exit: enter awaits the existing exit. A false exit result aborts entry and retains FocusScene/system. A successful exit is followed by a state recheck before one new entry begins.
+- Duplicate exit: after any enter completes, callers recheck and reuse `immersiveExitFlight`; only one system restore call runs.
+- Late auto-start: successful command plus refresh is insufficient by itself; `activeScene === 'focus'` is also required before entry.
+- Floating task intent: awaiting the same scene-change/exit path prevents task activation on exit failure or disposal.
+
 ## Deferred Minors
 
 - Tauri-only prompt/start/refresh ordering and system enter/exit failure branches need desktop-capable integration or Windows smoke coverage; browser preview intentionally cannot start the backend-owned timer.
@@ -94,8 +124,10 @@ The review's broad request for controllable Tauri command-response integration t
 - Ruling: manual browser immersive uses `visual-fallback` even though Pomodoro controls are disabled — manual display mode is a UI function independent of backend timer authority — cost if wrong: browser preview could not verify accessible immersive layout and Escape behavior.
 - Ruling: command success belongs to command result plus successful refresh — the refreshed backend view remains the final authority before auto-immersive — cost if wrong: immersive could open for a start that the UI failed to reconcile.
 - Ruling: keep all secondary focus context in one ContextDrawer — it preserves one task/settings draft and command authority while keeping the stage centered — cost if wrong: duplicated draft state or unclipped document overflow could emerge.
-- Ruling: guard pending starts with accepted-view generation and current-session identity — an old prompt must not start after newer backend state is accepted — cost if wrong: a stale choice could double-start or conflict with another client/session.
-- Ruling: serialize immersive exit and reuse the same result for scene navigation — concurrent exit requests must not race scene mutation — cost if wrong: tasks could appear even when system fullscreen restoration failed.
+- Ruling: guard pending starts with a current-session transition epoch and captured session identity — same-session refresh is harmless, while any accepted identity transition invalidates the old prompt — cost if wrong: routine polling could cancel valid intent or a stale choice could conflict with another client/session.
+- Ruling: serialize immersive enter and exit bidirectionally — every transition waits for opposing work and reuses same-direction work before mutating display state — cost if wrong: enter/exit races could leave stale fullscreen state or reveal tasks before restoration.
+- Ruling: route every task transition, including floating task intents, through `changeScene('tasks')` — system exit failure must keep FocusScene and prevent activation — cost if wrong: a background intent could bypass the fullscreen restore invariant.
+- Ruling: auto-enter only while the focus scene remains active — command/refresh completion does not preserve the user's earlier navigation intent — cost if wrong: a late start response could force immersive mode over the task scene.
 - Ruling: prompt Escape stops propagation — the topmost modal must cancel only its pending action while the page handler respects child default prevention — cost if wrong: one Escape would cancel the prompt and exit immersive simultaneously.
 - Ruling: preserve the baseline-compatible FocusScene task prop alias for this bounded task — the page still supplies exactly one collection and removing compatibility is not required for behavior — cost if wrong: an unseen prerequisite consumer could fail at compile time, while retaining it modestly broadens the component interface.
 - Ruling: verify Tauri-only branches statically and defer live system failure injection — browser preview cannot truthfully emulate Tauri without widening test infrastructure and authority — cost if wrong: a platform-only regression may remain until desktop smoke or dedicated integration coverage.

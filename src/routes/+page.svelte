@@ -90,9 +90,11 @@
   let uiPreferences = $state(readUiPreferences());
   let immersiveDisplay = $state<ImmersiveDisplayState>('off');
   let pendingStartInput = $state<StartPomodoroInput | null>(null);
-  let pendingStartGeneration = 0;
+  let pendingStartSessionEpoch = 0;
   let pendingStartSessionId: number | null = null;
-  let pomodoroViewGeneration = 0;
+  let pomodoroSessionEpoch = 0;
+  let acceptedPomodoroSessionId: number | null = null;
+  let immersiveEnterFlight: Promise<void> | null = null;
   let immersiveExitFlight: Promise<boolean> | null = null;
   let pomodoroSnapshot = $state<PomodoroSnapshot | null>(null);
   let pomodoroTaskSummaries = $state<PomodoroTaskSummary[]>([]);
@@ -154,14 +156,22 @@
     return error instanceof Error ? error.message : String(error);
   }
 
+  function acceptPomodoroSnapshot(snapshot: PomodoroSnapshot): void {
+    const sessionId = snapshot.currentSession?.id ?? null;
+    if (sessionId !== acceptedPomodoroSessionId) {
+      acceptedPomodoroSessionId = sessionId;
+      pomodoroSessionEpoch += 1;
+    }
+    pomodoroSnapshot = snapshot;
+  }
+
   function applyPomodoroResult(result: PomodoroMutationResult): void {
-    pomodoroSnapshot = result.snapshot;
+    acceptPomodoroSnapshot(result.snapshot);
     pomodoroCommandWarning = result.notificationWarning ?? null;
   }
 
   function applyPomodoroView(view: PomodoroView): void {
-    pomodoroViewGeneration += 1;
-    pomodoroSnapshot = view.snapshot;
+    acceptPomodoroSnapshot(view.snapshot);
     pomodoroTaskSummaries = view.taskSummaries;
     selectedFocusTaskId = reconcilePomodoroTaskSelection(selectedFocusTaskId, view.taskSummaries);
   }
@@ -211,21 +221,37 @@
   }
 
   async function enterImmersiveDisplay(): Promise<void> {
-    if (!tauriAvailable) {
-      immersiveDisplay = 'visual-fallback';
-      return;
-    }
+    if (immersiveEnterFlight !== null) return immersiveEnterFlight;
 
+    const flight = (async () => {
+      if (immersiveExitFlight !== null) {
+        if (!await immersiveExitFlight) return;
+      }
+      if (immersiveDisplay !== 'off') return;
+
+      if (!tauriAvailable) {
+        immersiveDisplay = 'visual-fallback';
+        return;
+      }
+
+      try {
+        await enterImmersiveMode();
+        immersiveDisplay = 'system';
+      } catch (cause) {
+        immersiveDisplay = 'visual-fallback';
+        pomodoroCommandWarning = `系统全屏不可用，已改用窗口内沉浸：${errorMessage(cause)}`;
+      }
+    })();
+    immersiveEnterFlight = flight;
     try {
-      await enterImmersiveMode();
-      immersiveDisplay = 'system';
-    } catch (cause) {
-      immersiveDisplay = 'visual-fallback';
-      pomodoroCommandWarning = `系统全屏不可用，已改用窗口内沉浸：${errorMessage(cause)}`;
+      await flight;
+    } finally {
+      if (immersiveEnterFlight === flight) immersiveEnterFlight = null;
     }
   }
 
   async function exitImmersiveDisplay(): Promise<boolean> {
+    if (immersiveEnterFlight !== null) await immersiveEnterFlight;
     if (immersiveExitFlight !== null) return immersiveExitFlight;
 
     const flight = (async () => {
@@ -258,7 +284,7 @@
       input.taskId
     );
 
-    if (started && immerse) await enterImmersiveDisplay();
+    if (started && immerse && activeScene === 'focus') await enterImmersiveDisplay();
   }
 
   function requestPomodoroStart(input: StartPomodoroInput): void {
@@ -269,7 +295,7 @@
 
     if (uiPreferences.autoImmersive === 'unset') {
       pendingStartInput = input;
-      pendingStartGeneration = pomodoroViewGeneration;
+      pendingStartSessionEpoch = pomodoroSessionEpoch;
       pendingStartSessionId = pomodoroSnapshot?.currentSession?.id ?? null;
       return;
     }
@@ -289,13 +315,13 @@
     preference: 'enabled' | 'disabled'
   ): void {
     const input = pendingStartInput;
-    const generation = pendingStartGeneration;
+    const sessionEpoch = pendingStartSessionEpoch;
     const sessionId = pendingStartSessionId;
     pendingStartInput = null;
     changeAutoImmersivePreference(preference);
     if (
       input !== null &&
-      generation === pomodoroViewGeneration &&
+      sessionEpoch === pomodoroSessionEpoch &&
       (pomodoroSnapshot?.currentSession?.id ?? null) === sessionId
     ) {
       void startPomodoroAndMaybeImmerse(input, preference === 'enabled');
@@ -303,7 +329,7 @@
   }
 
   async function changeScene(scene: AppScene): Promise<void> {
-    if (scene === 'tasks' && (immersiveDisplay !== 'off' || immersiveExitFlight !== null)) {
+    if (scene === 'tasks' && (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null)) {
       if (!await exitImmersiveDisplay()) return;
     }
     activeScene = scene;
@@ -342,7 +368,8 @@
       return;
     }
     if (intent.view === 'tasks' && intent.taskId !== null) {
-      activeScene = 'tasks';
+      await changeScene('tasks');
+      if (isDisposed() || activeScene !== 'tasks') return;
       const nonce = handleActivationId(intent.taskId);
       if (nonce !== null) await tick();
     }
@@ -618,7 +645,11 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.defaultPrevented || event.key !== 'Escape' || immersiveDisplay === 'off') return;
+    if (
+      event.defaultPrevented ||
+      event.key !== 'Escape' ||
+      (immersiveDisplay === 'off' && immersiveEnterFlight === null && immersiveExitFlight === null)
+    ) return;
     event.preventDefault();
     void exitImmersiveDisplay();
   }

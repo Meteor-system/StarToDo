@@ -128,6 +128,18 @@ test('shows a centered focus stage and exits visual immersive mode', async ({
   );
 });
 
+test('returns from browser visual immersive mode before showing tasks', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '专注' }).click();
+  await page.getByRole('button', { name: '进入沉浸' }).click();
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-immersive', 'visual-fallback');
+
+  await page.getByRole('button', { name: '返回任务' }).click();
+
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-immersive', 'off');
+  await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
+});
+
 test('does not horizontally overflow at 320px wide', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto('/');
