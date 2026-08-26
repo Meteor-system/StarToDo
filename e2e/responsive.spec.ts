@@ -184,6 +184,34 @@ test('active capsule preserves logical focus while expanding', async ({ page }) 
   await expect(page.getByRole('button', { name: '隐藏悬浮窗' })).toBeFocused();
 });
 
+test('keyboard focus inside keeps the active companion expanded past its deadline', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-27T12:00:00+08:00') });
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  await page.keyboard.press('Tab');
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  const focusedTarget = page.getByRole('button', { name: '打开专注工作区' });
+  await expect(focusedTarget).toBeFocused();
+
+  await page.clock.fastForward(5_700);
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  await expect(focusedTarget).toBeFocused();
+
+  await page.evaluate(() => {
+    const outside = document.createElement('button');
+    outside.textContent = 'outside floating companion';
+    document.body.append(outside);
+    outside.focus();
+  });
+  expect(await floating.evaluate((region) => !region.contains(document.activeElement))).toBe(true);
+  await page.clock.fastForward(700);
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+});
+
 test('failed logical focus restoration arms bounded collapse', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-08-25T12:00:00Z') });
   await installActiveFloatingTauriMock(page);

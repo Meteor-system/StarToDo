@@ -2,12 +2,12 @@
 
 ## Environment
 
-- Commit: Task 12 initial evidence commit `439473866cf4bfa11bcef5c677ff5f61a99ec5b0` plus the controller-review local-scroll strengthening under verification.
+- Tested Task 12 source/evidence range: `6416e303ec5ce37d47e64ce6b9d241bb5932327d..911393832edb3dfd4b6940f4d0e587da3649dbad` (initial evidence `439473866cf4bfa11bcef5c677ff5f61a99ec5b0`, non-vacuous scroll follow-up `911393832edb3dfd4b6940f4d0e587da3649dbad`); fix-round-1 test/doc changes are recorded by the later commit containing this document.
 - Windows version: Windows 11 Pro 10.0.26200 build 26200, 64-bit.
 - Display scale: 100% (96 DPI), supplied runtime fact; registry `Win8DpiScaling=0` was observed, while `LogPixels` was unset.
 - Monitor layout: one active AOC2702 display, 2560 x 1440 at 180 Hz on NVIDIA GeForce RTX 3060; supplied runtime fact says one active monitor.
 - Build command: exact requested `npm run tauri -- build --bundles nsis` exposed npm forwarding failure (`tauri build nsis`, exit 1); correctly forwarded `npm run tauri -- build -- --bundles nsis` exited 0 and produced the NSIS bundle.
-- Test date: 2026-08-26.
+- Test date: 2026-08-27 (local UTC+08:00); earlier browser verification began before the local date rollover.
 - Safety boundary: the real StarToDo 0.1.2 installation at `D:\Program Files\StarToDo`, real roaming/local app data, and the existing `startodo:` registration were inspected read-only only. The installed app was not launched, replaced, upgraded, or uninstalled. No protocol or notification registration was altered.
 
 ## Main window
@@ -28,7 +28,7 @@
 - [ ] Escape exits fullscreen. Blocker: browser E2E proves Escape exits visual fallback only, not Windows true fullscreen.
 - [ ] The visible exit action exits fullscreen. Blocker: browser E2E proves visual fallback behavior only.
 - [ ] Exiting restores the exact prior maximized or normal state. Blocker: requires native window state transitions.
-- [x] A fullscreen command failure uses in-window immersive fallback without changing Pomodoro state. Observed evidence: browser preview has no Tauri backend, entering immersive set `.app-shell[data-immersive="visual-fallback"]`, Escape restored `off`, and the preview’s disabled Pomodoro controls prevented state mutation; browser-error hooks stayed empty.
+- [ ] A fullscreen command failure uses in-window immersive fallback without changing Pomodoro state. Blocker: browser runtime absence selects visual fallback before `enterImmersiveMode` is invoked, so current E2E does not exercise a rejected `enter_immersive_mode` command or compare a live Pomodoro snapshot before/after; no isolated native failure injection was available.
 - [ ] Pause, resume, skip, reset, notification warning, and SQLite restoration still work. Blocker: requires isolated native database and notification-host interaction; Rust tests passed but are not native smoke.
 
 ## Task scene
@@ -56,7 +56,7 @@
 - [x] Running or paused focus defaults to capsule. Observed evidence: the active Tauri browser fixture returned a running focus snapshot and Chromium asserted `data-display-mode="capsule"` at 340 x 64.
 - [x] Pointer or keyboard interaction expands the capsule. Observed evidence: keyboard Tab/focus and explicit touch activation each changed the active fixture from `capsule` to `interaction-expanded`.
 - [x] Expansion collapses after the five-second interaction window and leave buffer. Observed evidence: a clock-controlled Chromium test kept `interaction-expanded` at 4,999 ms and observed `capsule` exactly at 5,000 ms without focus ownership.
-- [x] Keyboard focus inside prevents collapse. Observed evidence: Chromium focus-restoration coverage moved logical focus from capsule controls to matching expanded controls; reducer/unit coverage passed in the full gate, but no Windows-native WebView2 run was performed.
+- [x] Keyboard focus inside prevents collapse. Observed evidence: deterministic Chromium clock coverage expanded the active capsule by keyboard, kept the matching “打开专注工作区” control focused and `interaction-expanded` after 5,700 ms, then moved focus to a genuine outside button and observed `capsule` after the 700 ms leave buffer; browser-error hooks remained active. This is browser evidence, not Windows-native WebView2 smoke.
 - [ ] “始终展开” persists across floating-window recreation and process restart. Blocker: requires native preference persistence and process recreation.
 - [ ] Manual resize is not overwritten by later display-state changes. Blocker: requires a native resizable WebView window.
 - [ ] “恢复自动尺寸” restores the recommended size. Blocker: requires native window sizing.
