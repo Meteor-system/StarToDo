@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
@@ -29,13 +29,14 @@ use sysinfo::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Listener, LogicalSize, Manager, State, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager, State, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
 use url::Url;
 
 mod parser;
+mod pomodoro;
 mod projects;
 mod reminder_jobs;
 mod reminder_orchestrator;
@@ -43,6 +44,7 @@ mod reminders;
 mod tasks;
 
 const MAIN_WINDOW_LABEL: &str = "main";
+const FLOATING_WINDOW_LABEL: &str = "floating";
 const DATABASE_FILE_NAME: &str = "star-to-do.sqlite3";
 const NOTIFICATION_HOST_FILE_NAME: &str = "StarToDo.NotificationHost.exe";
 const STAGE0_NOTIFICATION_ID: &str = "stage0-scheduled-probe";
@@ -55,7 +57,13 @@ const TASK_ORGANIZATION_MIGRATION_VERSION: i64 = 4;
 const TASK_RECURRENCE_MIGRATION_VERSION: i64 = 5;
 const PROJECTS_AND_RELIABILITY_MIGRATION_VERSION: i64 = 6;
 const REMINDER_DELIVERY_RETRY_MIGRATION_VERSION: i64 = 7;
+const POMODORO_MIGRATION_VERSION: i64 = pomodoro::POMODORO_MIGRATION_VERSION;
+const POMODORO_ACTIVATION_INBOX_MIGRATION_VERSION: i64 =
+    pomodoro::POMODORO_ACTIVATION_INBOX_MIGRATION_VERSION;
+const TASK_NOTIFICATION_CHANNEL: &str = "tasks";
+const POMODORO_NOTIFICATION_CHANNEL: &str = pomodoro::POMODORO_NOTIFICATION_CHANNEL;
 const WINDOW_PREFERENCES_FILE_NAME: &str = "window-preferences.json";
+const FLOATING_WINDOW_PREFERENCES_FILE_NAME: &str = "floating-window-preferences.json";
 const REMINDER_WARNING_CLAIM_LEASE_MS: u128 = 15_000;
 
 #[cfg(windows)]
@@ -79,6 +87,9 @@ struct AppState {
     ui_rebuild_in_progress: AtomicBool,
     next_reminder_warning_id: AtomicU64,
     scheduled_reminder_retry_at_unix_ms: AtomicI64,
+    pomodoro_wake_generation: AtomicU64,
+    pomodoro_operation_lock: Mutex<()>,
+    pending_floating_intent: Mutex<Option<FloatingIntent>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,22 +209,102 @@ struct ReconcileReport {
     warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WindowLayout {
+    Adaptive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowBounds {
+    x: Option<i32>,
+    y: Option<i32>,
+    width: u32,
+    height: u32,
+}
+
+impl Default for WindowBounds {
+    fn default() -> Self {
+        Self {
+            x: None,
+            y: None,
+            width: 960,
+            height: 680,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowPreferences {
+    layout: WindowLayout,
+    maximized: bool,
+    normal_bounds: WindowBounds,
+    always_on_top: bool,
+    last_immersive: bool,
+}
+
+impl Default for WindowPreferences {
+    fn default() -> Self {
+        Self {
+            layout: WindowLayout::Adaptive,
+            maximized: true,
+            normal_bounds: WindowBounds::default(),
+            always_on_top: false,
+            last_immersive: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyWindowPreferences {
     mode: String,
     width: u32,
     height: u32,
     always_on_top: bool,
 }
 
-impl Default for WindowPreferences {
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StoredWindowPreferences {
+    Current(WindowPreferences),
+    Legacy(LegacyWindowPreferences),
+}
+
+struct DecodedWindowPreferences {
+    preferences: WindowPreferences,
+    migrated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FloatingIntent {
+    view: String,
+    task_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FloatingWindowPreferences {
+    visible: bool,
+    x: Option<i32>,
+    y: Option<i32>,
+    width: f64,
+    height: f64,
+    always_on_top: bool,
+}
+
+impl Default for FloatingWindowPreferences {
     fn default() -> Self {
         Self {
-            mode: "full".to_string(),
-            width: 800,
-            height: 600,
-            always_on_top: false,
+            visible: false,
+            x: None,
+            y: None,
+            width: 340.0,
+            height: 180.0,
+            always_on_top: true,
         }
     }
 }
@@ -227,6 +318,10 @@ fn now_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+fn emit_tasks_changed(app: &AppHandle) {
+    let _ = app.emit("tasks-changed", ());
 }
 
 fn configure_database_connection(connection: &Connection) -> Result<(), String> {
@@ -765,6 +860,25 @@ fn apply_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
         )?;
     }
 
+    if !migration_applied(POMODORO_MIGRATION_VERSION)? {
+        transaction.execute_batch(pomodoro::MIGRATION_SQL)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version, applied_at_unix_ms) VALUES (?1, ?2)",
+            (POMODORO_MIGRATION_VERSION, now_unix_ms() as i64),
+        )?;
+    }
+
+    if !migration_applied(POMODORO_ACTIVATION_INBOX_MIGRATION_VERSION)? {
+        transaction.execute_batch(pomodoro::ACTIVATION_INBOX_MIGRATION_SQL)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version, applied_at_unix_ms) VALUES (?1, ?2)",
+            (
+                POMODORO_ACTIVATION_INBOX_MIGRATION_VERSION,
+                now_unix_ms() as i64,
+            ),
+        )?;
+    }
+
     transaction.commit()
 }
 
@@ -1056,10 +1170,49 @@ fn emit_reminder_warning(app: &AppHandle, task_id: i64, message: String) {
 }
 
 fn queue_notification_activation(app: &AppHandle, url: &Url) {
+    if let Some(activation) = pomodoro::parse_notification_activation(url) {
+        let state = app.state::<AppState>();
+        let _operation = match state.pomodoro_operation_lock.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("pomodoro notification activation operation lock failed: {error}");
+                return;
+            }
+        };
+        let now = tasks::now_unix_ms();
+        let session_id = match state.database.lock() {
+            Ok(mut connection) => match pomodoro::settle_at(&mut connection, now).and_then(|_| {
+                pomodoro::consume_notification_activation_at(&mut connection, &activation, now)
+            }) {
+                Ok(session_id) => session_id,
+                Err(error) => {
+                    eprintln!("pomodoro notification activation consumption failed: {error}");
+                    return;
+                }
+            },
+            Err(error) => {
+                eprintln!("pomodoro notification activation database lock failed: {error}");
+                return;
+            }
+        };
+        let Some(session_id) = session_id else {
+            return;
+        };
+        match reconcile_pomodoro_locked(app, true) {
+            Ok((_, Some(warning))) => {
+                eprintln!("pomodoro activation reconciliation warning: {warning}")
+            }
+            Ok((_, None)) => {}
+            Err(error) => eprintln!("pomodoro activation reconciliation failed: {error}"),
+        }
+        show_or_create_main_window(app);
+        let _ = app.emit("pomodoro-activation", session_id);
+        return;
+    }
+
     let Some(activation) = reminder_jobs::parse_notification_activation(url) else {
         return;
     };
-
     let task_id = match app.state::<AppState>().database.lock() {
         Ok(mut connection) => match reminder_jobs::consume_notification_activation(
             &mut connection,
@@ -1077,11 +1230,9 @@ fn queue_notification_activation(app: &AppHandle, url: &Url) {
             return;
         }
     };
-
     let Some(task_id) = task_id else {
         return;
     };
-
     let _ = app.emit("notification-activation", ());
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1125,16 +1276,54 @@ fn window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn validate_window_preferences(preferences: &WindowPreferences) -> Result<(), String> {
-    if !matches!(preferences.mode.as_str(), "full" | "compact") {
-        return Err("window mode must be full or compact".to_string());
+    if !(520..=7_680).contains(&preferences.normal_bounds.width) {
+        return Err("window width must be between 520 and 7680".to_string());
     }
-    if !(260..=2_000).contains(&preferences.width) {
-        return Err("window width must be between 260 and 2000".to_string());
+    if !(420..=4_320).contains(&preferences.normal_bounds.height) {
+        return Err("window height must be between 420 and 4320".to_string());
     }
-    if !(180..=1_600).contains(&preferences.height) {
-        return Err("window height must be between 180 and 1600".to_string());
+    for coordinate in [preferences.normal_bounds.x, preferences.normal_bounds.y]
+        .into_iter()
+        .flatten()
+    {
+        if !(-32_768..=32_767).contains(&coordinate) {
+            return Err("window coordinates must be between -32768 and 32767".to_string());
+        }
     }
     Ok(())
+}
+
+fn decode_window_preferences(content: &str) -> Result<DecodedWindowPreferences, String> {
+    match serde_json::from_str::<StoredWindowPreferences>(content).map_err(string_error)? {
+        StoredWindowPreferences::Current(preferences) => {
+            validate_window_preferences(&preferences)?;
+            Ok(DecodedWindowPreferences {
+                preferences,
+                migrated: false,
+            })
+        }
+        StoredWindowPreferences::Legacy(legacy) => {
+            let maximized = match legacy.mode.as_str() {
+                "full" => true,
+                "compact" => false,
+                _ => return Err("unknown legacy window mode".to_string()),
+            };
+            let preferences = WindowPreferences {
+                maximized,
+                normal_bounds: WindowBounds {
+                    width: legacy.width.clamp(520, 7_680),
+                    height: legacy.height.clamp(420, 4_320),
+                    ..WindowBounds::default()
+                },
+                always_on_top: legacy.always_on_top,
+                ..WindowPreferences::default()
+            };
+            Ok(DecodedWindowPreferences {
+                preferences,
+                migrated: true,
+            })
+        }
+    }
 }
 
 fn read_window_preferences(app: &AppHandle) -> WindowPreferences {
@@ -1144,10 +1333,15 @@ fn read_window_preferences(app: &AppHandle) -> WindowPreferences {
     let Ok(content) = fs::read_to_string(path) else {
         return WindowPreferences::default();
     };
-    serde_json::from_str::<WindowPreferences>(&content)
-        .ok()
-        .filter(|preferences| validate_window_preferences(preferences).is_ok())
-        .unwrap_or_default()
+    let Ok(decoded) = decode_window_preferences(&content) else {
+        return WindowPreferences::default();
+    };
+    if decoded.migrated {
+        if let Err(error) = save_window_preferences_to_disk(app, &decoded.preferences) {
+            eprintln!("window preferences migration write failed: {error}");
+        }
+    }
+    decoded.preferences
 }
 
 fn save_window_preferences_to_disk(
@@ -1169,33 +1363,221 @@ fn apply_window_preferences(
 ) -> Result<(), String> {
     validate_window_preferences(preferences)?;
     window
-        .set_size(LogicalSize::new(preferences.width, preferences.height))
+        .set_min_size(Some(LogicalSize::new(520.0, 420.0)))
         .map_err(string_error)?;
-    window
-        .set_resizable(preferences.mode == "full")
-        .map_err(string_error)?;
+    window.set_resizable(true).map_err(string_error)?;
     window
         .set_always_on_top(preferences.always_on_top)
+        .map_err(string_error)?;
+    window.set_fullscreen(false).map_err(string_error)?;
+    if preferences.maximized {
+        window.maximize().map_err(string_error)?;
+    } else {
+        window.unmaximize().map_err(string_error)?;
+        window
+            .set_size(LogicalSize::new(
+                preferences.normal_bounds.width,
+                preferences.normal_bounds.height,
+            ))
+            .map_err(string_error)?;
+        if let (Some(x), Some(y)) = (preferences.normal_bounds.x, preferences.normal_bounds.y) {
+            window
+                .set_position(LogicalPosition::new(x as f64, y as f64))
+                .map_err(string_error)?;
+        }
+    }
+    Ok(())
+}
+
+fn floating_window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join(FLOATING_WINDOW_PREFERENCES_FILE_NAME))
         .map_err(string_error)
 }
 
-fn set_window_mode_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
-    if !matches!(mode, "full" | "compact") {
-        return Err("window mode must be full or compact".to_string());
+fn validate_floating_window_preferences(
+    preferences: &FloatingWindowPreferences,
+) -> Result<(), String> {
+    if !(260.0..=800.0).contains(&preferences.width) {
+        return Err("floating window width must be between 260 and 800".to_string());
     }
-    let mut preferences = read_window_preferences(app);
-    preferences.mode = mode.to_string();
-    if mode == "full" {
-        preferences.width = 800;
-        preferences.height = 600;
+    if !(120.0..=800.0).contains(&preferences.height) {
+        return Err("floating window height must be between 120 and 800".to_string());
+    }
+    for coordinate in [preferences.x, preferences.y].into_iter().flatten() {
+        if !(-10_000..=10_000).contains(&coordinate) {
+            return Err("floating window coordinates must be between -10000 and 10000".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreferences {
+    let Ok(path) = floating_window_preferences_path(app) else {
+        return FloatingWindowPreferences::default();
+    };
+    let Ok(content) = fs::read_to_string(path) else {
+        return FloatingWindowPreferences::default();
+    };
+    serde_json::from_str::<FloatingWindowPreferences>(&content)
+        .ok()
+        .filter(|preferences| validate_floating_window_preferences(preferences).is_ok())
+        .unwrap_or_default()
+}
+
+fn save_floating_window_preferences_to_disk(
+    app: &AppHandle,
+    preferences: &FloatingWindowPreferences,
+) -> Result<(), String> {
+    validate_floating_window_preferences(preferences)?;
+    let path = floating_window_preferences_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(string_error)?;
+    }
+    let content = serde_json::to_vec_pretty(preferences).map_err(string_error)?;
+    fs::write(path, content).map_err(string_error)
+}
+
+fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
+    let window_for_events = window.clone();
+    let app_for_events = app.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window_for_events.hide();
+            let mut preferences = read_floating_window_preferences(&app_for_events);
+            preferences.visible = false;
+            let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
+            return;
+        }
+
+        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+            return;
+        }
+
+        let mut preferences = read_floating_window_preferences(&app_for_events);
+        if let Ok(scale_factor) = window_for_events.scale_factor() {
+            if let Ok(position) = window_for_events.outer_position() {
+                let logical: LogicalPosition<f64> = position.to_logical(scale_factor);
+                preferences.x = Some(logical.x.round() as i32);
+                preferences.y = Some(logical.y.round() as i32);
+            }
+            if let Ok(size) = window_for_events.inner_size() {
+                let logical: LogicalSize<f64> = size.to_logical(scale_factor);
+                preferences.width = logical.width.round();
+                preferences.height = logical.height.round();
+            }
+        }
+        let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
+    });
+}
+
+fn show_floating_window_internal(app: &AppHandle) -> Result<(), String> {
+    let preferences = read_floating_window_preferences(app);
+    if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+        window
+            .set_always_on_top(preferences.always_on_top)
+            .map_err(string_error)?;
+        window.show().map_err(string_error)?;
+        window.set_focus().map_err(string_error)?;
+        let mut updated = preferences;
+        updated.visible = true;
+        return save_floating_window_preferences_to_disk(app, &updated);
+    }
+
+    let app_for_thread = app.clone();
+    let preferences_for_thread = preferences.clone();
+    thread::spawn(move || {
+        if let Err(error) = create_floating_window(&app_for_thread, &preferences_for_thread) {
+            eprintln!("创建悬浮窗失败: {error}");
+        }
+    });
+    Ok(())
+}
+
+fn create_floating_window(
+    app: &AppHandle,
+    preferences: &FloatingWindowPreferences,
+) -> Result<(), String> {
+    let window = WebviewWindowBuilder::new(
+        app,
+        FLOATING_WINDOW_LABEL,
+        WebviewUrl::App("?window=floating".into()),
+    )
+    .title("StarToDo 悬浮窗")
+    .inner_size(preferences.width, preferences.height)
+    .decorations(false)
+    .always_on_top(preferences.always_on_top)
+    .skip_taskbar(true)
+    .resizable(true)
+    .maximizable(false)
+    .build()
+    .map_err(string_error)?;
+
+    if let (Some(x), Some(y)) = (preferences.x, preferences.y) {
+        window
+            .set_position(LogicalPosition::<f64>::new(x as f64, y as f64))
+            .map_err(string_error)?;
+    }
+    install_floating_window_tracking(app, &window);
+
+    let mut updated = preferences.clone();
+    updated.visible = true;
+    save_floating_window_preferences_to_disk(app, &updated)?;
+    window.show().map_err(string_error)?;
+    window.set_focus().map_err(string_error)
+}
+
+fn hide_floating_window_internal(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+        window.hide().map_err(string_error)?;
+    }
+    let mut preferences = read_floating_window_preferences(app);
+    preferences.visible = false;
+    save_floating_window_preferences_to_disk(app, &preferences)
+}
+
+fn toggle_floating_window_internal(app: &AppHandle) -> Result<(), String> {
+    let visible = app
+        .get_webview_window(FLOATING_WINDOW_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        hide_floating_window_internal(app)
     } else {
-        preferences.width = 380;
-        preferences.height = 520;
+        show_floating_window_internal(app)
     }
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        apply_window_preferences(&window, &preferences)?;
-    }
-    save_window_preferences_to_disk(app, &preferences)
+}
+
+fn install_main_window_tracking(app: &AppHandle, window: &WebviewWindow) {
+    let window_for_events = window.clone();
+    let app_for_events = app.clone();
+    window.on_window_event(move |event| {
+        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+            return;
+        }
+        if window_for_events.is_fullscreen().unwrap_or(false) {
+            return;
+        }
+        let mut preferences = read_window_preferences(&app_for_events);
+        preferences.maximized = window_for_events.is_maximized().unwrap_or(false);
+        if !preferences.maximized {
+            if let Ok(scale) = window_for_events.scale_factor() {
+                if let Ok(position) = window_for_events.outer_position() {
+                    let p: LogicalPosition<f64> = position.to_logical(scale);
+                    preferences.normal_bounds.x = Some(p.x.round() as i32);
+                    preferences.normal_bounds.y = Some(p.y.round() as i32);
+                }
+                if let Ok(size) = window_for_events.inner_size() {
+                    let s: LogicalSize<f64> = size.to_logical(scale);
+                    preferences.normal_bounds.width = s.width.round() as u32;
+                    preferences.normal_bounds.height = s.height.round() as u32;
+                }
+            }
+        }
+        let _ = save_window_preferences_to_disk(&app_for_events, &preferences);
+    });
 }
 
 fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
@@ -1511,6 +1893,7 @@ fn parse_task_drafts(text: String, today_local: String) -> Result<Vec<parser::Ta
 }
 
 async fn task_mutation(app: AppHandle, task: tasks::Task) -> TaskMutation {
+    emit_tasks_changed(&app);
     let reminder_warning = sync_latest_task_reminder_for_app(app, task.id)
         .await
         .unwrap_or_else(Some);
@@ -1549,12 +1932,17 @@ async fn update_task(
 
 #[tauri::command]
 fn set_task_planned_date(
+    app: AppHandle,
     id: i64,
     planned_date: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<tasks::Task, String> {
-    let mut connection = state.database.lock().map_err(string_error)?;
-    tasks::set_planned_date(&mut connection, id, planned_date)
+    let task = {
+        let mut connection = state.database.lock().map_err(string_error)?;
+        tasks::set_planned_date(&mut connection, id, planned_date)?
+    };
+    emit_tasks_changed(&app);
+    Ok(task)
 }
 
 #[tauri::command]
@@ -1568,6 +1956,7 @@ async fn set_task_completed(
         let mut connection = state.database.lock().map_err(string_error)?;
         tasks::set_completed(&mut connection, id, completed)?
     };
+    emit_tasks_changed(&app);
     let reminder_warning = sync_latest_task_reminder_for_app(app.clone(), mutation.task.id)
         .await
         .unwrap_or_else(Some);
@@ -1623,6 +2012,7 @@ async fn delete_task(
         let mut connection = state.database.lock().map_err(string_error)?;
         tasks::delete(&mut connection, id)?;
     }
+    emit_tasks_changed(&app);
     Ok(sync_latest_task_reminder_for_app(app, id)
         .await
         .unwrap_or_else(Some))
@@ -1651,6 +2041,7 @@ async fn permanently_delete_task(
         let mut connection = state.database.lock().map_err(string_error)?;
         tasks::permanently_delete(&mut connection, id)?;
     }
+    emit_tasks_changed(&app);
     Ok(sync_latest_task_reminder_for_app(app, id)
         .await
         .unwrap_or_else(Some))
@@ -1839,13 +2230,462 @@ fn unix_ms_to_utc(unix_ms: i64) -> Result<String, String> {
         .ok_or_else(|| "reminder timestamp is outside the supported UTC range".to_string())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PomodoroCommandResult {
+    snapshot: pomodoro::PomodoroSnapshot,
+    session: Option<pomodoro::PomodoroSession>,
+    notification_tag_to_cancel: Option<String>,
+    notification_warning: Option<String>,
+}
+
+fn emit_pomodoro_state_changed(app: &AppHandle, snapshot: &pomodoro::PomodoroSnapshot) {
+    let _ = app.emit("pomodoro-state-changed", snapshot);
+}
+
+fn list_pomodoro_notifications(
+    app: &AppHandle,
+) -> Result<Vec<reminders::ScheduledReminder>, String> {
+    let (_, response) = invoke_notification_host(
+        app,
+        &json!({
+            "operation": "list",
+            "channel": POMODORO_NOTIFICATION_CHANNEL,
+        }),
+    )?;
+    let items = response
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "notification host list response did not contain items".to_string())?;
+    items
+        .iter()
+        .map(|item| {
+            let tag = item
+                .get("tag")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "scheduled pomodoro notification has no tag".to_string())?
+                .to_string();
+            let due_at_utc = item
+                .get("dueAtUtc")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("scheduled pomodoro notification {tag} has no dueAtUtc"))?;
+            let due_at_unix_ms = DateTime::parse_from_rfc3339(due_at_utc)
+                .map_err(|error| {
+                    format!("scheduled pomodoro notification {tag} has invalid dueAtUtc: {error}")
+                })?
+                .timestamp_millis();
+            Ok(reminders::ScheduledReminder {
+                tag,
+                due_at_unix_ms,
+                activation_uri: item
+                    .get("activationUri")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
+        })
+        .collect()
+}
+
+fn cancel_pomodoro_notification(app: &AppHandle, tag: &str) -> Result<(), String> {
+    invoke_notification_host(
+        app,
+        &json!({
+            "operation": "cancel",
+            "id": tag,
+            "channel": POMODORO_NOTIFICATION_CHANNEL,
+        }),
+    )
+    .map(|_| ())
+}
+
+fn cancel_optional_pomodoro_notification(
+    app: &AppHandle,
+    tag: Option<&str>,
+    warning: &mut Option<String>,
+) {
+    if let Some(tag) = tag {
+        if let Err(error) = cancel_pomodoro_notification(app, tag) {
+            append_pomodoro_warning(
+                warning,
+                format!("无法取消番茄钟通知，计时状态已保存：{error}"),
+            );
+        }
+    }
+}
+
+fn append_pomodoro_warning(warning: &mut Option<String>, message: String) {
+    *warning = Some(match warning.take() {
+        Some(current) => format!("{current}；{message}"),
+        None => message,
+    });
+}
+
+fn pomodoro_notification_text(session: &pomodoro::PomodoroSession) -> (String, String) {
+    let task = session.task_title_snapshot.as_deref().unwrap_or("独立专注");
+    match session.phase {
+        pomodoro::PomodoroPhase::Focus => (
+            "专注阶段完成".to_string(),
+            format!("「{task}」的专注时间已结束。请休息一下，再手动开始下一阶段。"),
+        ),
+        pomodoro::PomodoroPhase::ShortBreak => (
+            "短休息结束".to_string(),
+            "短休息已结束。准备好后可手动开始下一次专注。".to_string(),
+        ),
+        pomodoro::PomodoroPhase::LongBreak => (
+            "长休息结束".to_string(),
+            "长休息已结束。准备好后可手动开始新的专注周期。".to_string(),
+        ),
+    }
+}
+
+fn prepare_and_schedule_pomodoro_notification(
+    app: &AppHandle,
+    session: &pomodoro::PomodoroSession,
+    now: i64,
+) -> Result<(pomodoro::PomodoroSession, pomodoro::PomodoroSnapshot), String> {
+    let token = pomodoro::generate_notification_token()?;
+    let (spec, prepared, snapshot) = {
+        let state = app.state::<AppState>();
+        let mut connection = state.database.lock().map_err(string_error)?;
+        let spec = pomodoro::prepare_notification_at(&mut connection, session.id, &token, now)?;
+        let snapshot = pomodoro::get_at(&mut connection, now)?;
+        let prepared = snapshot.current_session.clone().ok_or_else(|| {
+            "pomodoro session disappeared while preparing notification".to_string()
+        })?;
+        (spec, prepared, snapshot)
+    };
+    let due_at_utc = prepared
+        .target_ends_at_unix_ms
+        .ok_or_else(|| "running pomodoro session has no target time".to_string())
+        .and_then(unix_ms_to_utc)?;
+    let (title, body) = pomodoro_notification_text(&prepared);
+    invoke_notification_host(
+        app,
+        &json!({
+            "operation": "schedule",
+            "id": spec.tag,
+            "title": title,
+            "body": body,
+            "dueAtUtc": due_at_utc,
+            "activationUri": spec.activation_uri,
+            "channel": POMODORO_NOTIFICATION_CHANNEL,
+        }),
+    )?;
+    Ok((prepared, snapshot))
+}
+
+fn invalidate_pomodoro_wake(state: &AppState) {
+    state
+        .pomodoro_wake_generation
+        .fetch_add(1, Ordering::AcqRel);
+}
+
+fn schedule_pomodoro_wake(app: &AppHandle, session: &pomodoro::PomodoroSession) {
+    let Some(target) = session.target_ends_at_unix_ms else {
+        return;
+    };
+    let generation = app
+        .state::<AppState>()
+        .pomodoro_wake_generation
+        .fetch_add(1, Ordering::AcqRel)
+        + 1;
+    let app = app.clone();
+    thread::spawn(move || {
+        let delay = target.saturating_sub(tasks::now_unix_ms()).max(0) as u64;
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
+        let state = app.state::<AppState>();
+        if state.pomodoro_wake_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        let _operation = match state.pomodoro_operation_lock.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("pomodoro wake operation lock failed: {error}");
+                return;
+            }
+        };
+        if state.pomodoro_wake_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if let Err(error) = reconcile_pomodoro_locked(&app, true) {
+            eprintln!("pomodoro wake reconciliation failed: {error}");
+        }
+    });
+}
+
+/// Must be called with `pomodoro_operation_lock` held. It never holds the
+/// database mutex while talking to the notification sidecar.
+fn reconcile_pomodoro_at_locked(
+    app: &AppHandle,
+    emit_state: bool,
+    now: i64,
+) -> Result<(pomodoro::PomodoroSnapshot, Option<String>), String> {
+    let state = app.state::<AppState>();
+    let (settled_tag, mut snapshot) = {
+        let mut connection = state.database.lock().map_err(string_error)?;
+        let settled_tag =
+            pomodoro::settle_at(&mut connection, now)?.and_then(|session| session.notification_tag);
+        let snapshot = pomodoro::get_at(&mut connection, now)?;
+        (settled_tag, snapshot)
+    };
+    let mut warning = None;
+    if settled_tag.is_some() {
+        invalidate_pomodoro_wake(&state);
+    }
+    let scheduled = match list_pomodoro_notifications(app) {
+        Ok(items) => items,
+        Err(error) => {
+            append_pomodoro_warning(&mut warning, format!("无法列出番茄钟通知：{error}"));
+            if let Some(session) = snapshot
+                .current_session
+                .as_ref()
+                .filter(|session| session.status == pomodoro::PomodoroStatus::Running)
+            {
+                schedule_pomodoro_wake(app, session);
+            } else {
+                invalidate_pomodoro_wake(&state);
+            }
+            if emit_state {
+                emit_pomodoro_state_changed(app, &snapshot);
+            }
+            return Ok((snapshot, warning));
+        }
+    };
+    let running = snapshot
+        .current_session
+        .as_ref()
+        .filter(|session| session.status == pomodoro::PomodoroStatus::Running)
+        .cloned();
+    let mut keep_tag = None;
+    if let Some(session) = running.as_ref() {
+        for item in &scheduled {
+            let matches = match item.activation_uri.as_deref() {
+                Some(activation_uri) => {
+                    let connection = state.database.lock().map_err(string_error)?;
+                    pomodoro::scheduled_notification_matches_running_session(
+                        &connection,
+                        session.id,
+                        &item.tag,
+                        item.due_at_unix_ms,
+                        activation_uri,
+                    )?
+                }
+                None => false,
+            };
+            if matches && keep_tag.is_none() {
+                keep_tag = Some(item.tag.clone());
+            }
+        }
+    }
+    for item in &scheduled {
+        if keep_tag.as_deref() != Some(item.tag.as_str()) {
+            cancel_optional_pomodoro_notification(app, Some(&item.tag), &mut warning);
+        }
+    }
+    if let Some(session) = running {
+        if keep_tag.is_none() {
+            match prepare_and_schedule_pomodoro_notification(app, &session, now) {
+                Ok((prepared, prepared_snapshot)) => {
+                    snapshot = prepared_snapshot;
+                    schedule_pomodoro_wake(app, &prepared);
+                }
+                Err(error) => {
+                    append_pomodoro_warning(
+                        &mut warning,
+                        format!("无法安排番茄钟通知，计时仍会继续：{error}"),
+                    );
+                    schedule_pomodoro_wake(app, &session);
+                }
+            }
+        } else {
+            schedule_pomodoro_wake(app, &session);
+        }
+    } else {
+        invalidate_pomodoro_wake(&state);
+    }
+    if emit_state {
+        emit_pomodoro_state_changed(app, &snapshot);
+    }
+    Ok((snapshot, warning))
+}
+
+fn reconcile_pomodoro_locked(
+    app: &AppHandle,
+    emit_state: bool,
+) -> Result<(pomodoro::PomodoroSnapshot, Option<String>), String> {
+    reconcile_pomodoro_at_locked(app, emit_state, tasks::now_unix_ms())
+}
+
+fn reconcile_pomodoro(
+    app: &AppHandle,
+    emit_state: bool,
+) -> Result<(pomodoro::PomodoroSnapshot, Option<String>), String> {
+    let state = app.state::<AppState>();
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    reconcile_pomodoro_locked(app, emit_state)
+}
+
+fn complete_pomodoro_mutation_locked(
+    app: &AppHandle,
+    mutation: pomodoro::PomodoroMutationResult,
+) -> Result<PomodoroCommandResult, String> {
+    let state = app.state::<AppState>();
+    invalidate_pomodoro_wake(&state);
+    let mut warning = None;
+    cancel_optional_pomodoro_notification(
+        app,
+        mutation.notification_tag_to_cancel.as_deref(),
+        &mut warning,
+    );
+    let (snapshot, reconciliation_warning) = reconcile_pomodoro_locked(app, false)?;
+    if let Some(message) = reconciliation_warning {
+        append_pomodoro_warning(&mut warning, message);
+    }
+    let session = snapshot.current_session.clone();
+    emit_pomodoro_state_changed(app, &snapshot);
+    Ok(PomodoroCommandResult {
+        snapshot,
+        session,
+        notification_tag_to_cancel: mutation.notification_tag_to_cancel,
+        notification_warning: warning,
+    })
+}
+
+fn restore_pomodoro_for_app(app: &AppHandle) {
+    match reconcile_pomodoro(app, true) {
+        Ok((_, Some(warning))) => eprintln!("pomodoro startup reconciliation warning: {warning}"),
+        Ok((_, None)) => {}
+        Err(error) => eprintln!("pomodoro startup reconciliation failed: {error}"),
+    }
+}
+
+#[tauri::command]
+fn get_pomodoro(app: AppHandle) -> Result<pomodoro::PomodoroSnapshot, String> {
+    let (snapshot, warning) = reconcile_pomodoro(&app, false)?;
+    if let Some(warning) = warning {
+        eprintln!("pomodoro get reconciliation warning: {warning}");
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn get_pomodoro_view(app: AppHandle) -> Result<pomodoro::PomodoroView, String> {
+    let state = app.state::<AppState>();
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    let now = tasks::now_unix_ms();
+    let (_, warning) = reconcile_pomodoro_at_locked(&app, false, now)?;
+    if let Some(warning) = warning {
+        eprintln!("pomodoro view reconciliation warning: {warning}");
+    }
+    let mut connection = state.database.lock().map_err(string_error)?;
+    pomodoro::view_at(&mut connection, now)
+}
+
+fn run_pomodoro_mutation(
+    app: &AppHandle,
+    operation: impl FnOnce(&mut Connection, i64) -> Result<pomodoro::PomodoroMutationResult, String>,
+) -> Result<PomodoroCommandResult, String> {
+    let state = app.state::<AppState>();
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    let mutation = {
+        let mut connection = state.database.lock().map_err(string_error)?;
+        operation(&mut connection, tasks::now_unix_ms())?
+    };
+    complete_pomodoro_mutation_locked(app, mutation)
+}
+
+#[tauri::command]
+fn update_pomodoro_settings(
+    app: AppHandle,
+    input: pomodoro::UpdatePomodoroSettingsInput,
+) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, |connection, now| {
+        pomodoro::update_settings_at(connection, input, now)
+    })
+}
+
+#[tauri::command]
+fn start_pomodoro(
+    app: AppHandle,
+    input: pomodoro::StartPomodoroInput,
+) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, |connection, now| {
+        pomodoro::start_at(connection, input, now)
+    })
+}
+
+#[tauri::command]
+fn pause_pomodoro(app: AppHandle) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, pomodoro::pause_at)
+}
+
+#[tauri::command]
+fn resume_pomodoro(app: AppHandle) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, pomodoro::resume_at)
+}
+
+#[tauri::command]
+fn skip_pomodoro(app: AppHandle) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, pomodoro::skip_at)
+}
+
+#[tauri::command]
+fn reset_pomodoro(app: AppHandle) -> Result<PomodoroCommandResult, String> {
+    run_pomodoro_mutation(&app, pomodoro::reset_at)
+}
+
+#[tauri::command]
+fn list_pomodoro_task_summaries(
+    app: AppHandle,
+) -> Result<Vec<pomodoro::PomodoroTaskSummary>, String> {
+    let state = app.state::<AppState>();
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    let (_, warning) = reconcile_pomodoro_locked(&app, false)?;
+    if let Some(warning) = warning {
+        eprintln!("pomodoro summary reconciliation warning: {warning}");
+    }
+    let mut connection = state.database.lock().map_err(string_error)?;
+    pomodoro::list_task_summaries_at(&mut connection, tasks::now_unix_ms())
+}
+
+#[tauri::command]
+fn claim_pending_pomodoro_activations(
+    consumer_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<pomodoro::PendingPomodoroActivation>, String> {
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    let mut connection = state.database.lock().map_err(string_error)?;
+    pomodoro::claim_pending_activations_at(&mut connection, &consumer_id, 1, tasks::now_unix_ms())
+}
+
+#[tauri::command]
+fn acknowledge_pending_pomodoro_activations(
+    consumer_id: String,
+    ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<pomodoro::PomodoroActivationAckResult, String> {
+    let _operation = state.pomodoro_operation_lock.lock().map_err(string_error)?;
+    let mut connection = state.database.lock().map_err(string_error)?;
+    pomodoro::acknowledge_pending_activations_at(
+        &mut connection,
+        &consumer_id,
+        &ids,
+        tasks::now_unix_ms(),
+    )
+}
+
 struct NotificationReminderHost {
     app: AppHandle,
 }
 
 impl reminder_orchestrator::ReminderHost for NotificationReminderHost {
     fn list(&self) -> Result<Vec<reminders::ScheduledReminder>, String> {
-        let (_, response) = invoke_notification_host(&self.app, &json!({ "operation": "list" }))?;
+        let (_, response) = invoke_notification_host(
+            &self.app,
+            &json!({ "operation": "list", "channel": TASK_NOTIFICATION_CHANNEL }),
+        )?;
         let items = response
             .get("items")
             .and_then(Value::as_array)
@@ -1894,6 +2734,7 @@ impl reminder_orchestrator::ReminderHost for NotificationReminderHost {
                 "body": spec.body,
                 "dueAtUtc": due_at_utc,
                 "activationUri": activation_uri,
+                "channel": TASK_NOTIFICATION_CHANNEL,
             }),
         )
         .map(|_| ())
@@ -1905,6 +2746,7 @@ impl reminder_orchestrator::ReminderHost for NotificationReminderHost {
             &json!({
                 "operation": "cancel",
                 "id": tag,
+                "channel": TASK_NOTIFICATION_CHANNEL,
             }),
         )
         .map(|_| ())
@@ -2077,7 +2919,12 @@ fn unavailable_notification_diagnostics(error: String) -> NotificationDiagnostic
 
 #[tauri::command]
 async fn get_notification_diagnostics(app: AppHandle) -> NotificationDiagnostics {
-    match invoke_notification_host_async(app, json!({ "operation": "diagnostics" })).await {
+    match invoke_notification_host_async(
+        app,
+        json!({ "operation": "diagnostics", "channel": TASK_NOTIFICATION_CHANNEL }),
+    )
+    .await
+    {
         Ok((host_path, response)) => {
             let status = response
                 .get("setting")
@@ -2114,6 +2961,7 @@ async fn send_test_notification(app: AppHandle) -> Result<(), String> {
             "title": "StarToDo",
             "body": "Stage 0 notification test",
             "activationUri": STAGE0_ACTIVATION_URI,
+            "channel": TASK_NOTIFICATION_CHANNEL,
         }),
     )
     .await
@@ -2131,6 +2979,7 @@ async fn schedule_test_notification(app: AppHandle, due_at_utc: String) -> Resul
             "body": "Stage 0 scheduled notification test",
             "dueAtUtc": due_at_utc,
             "activationUri": STAGE0_ACTIVATION_URI,
+            "channel": TASK_NOTIFICATION_CHANNEL,
         }),
     )
     .await
@@ -2144,6 +2993,7 @@ async fn cancel_test_notification(app: AppHandle) -> Result<Value, String> {
         json!({
             "operation": "cancel",
             "id": STAGE0_NOTIFICATION_ID,
+            "channel": TASK_NOTIFICATION_CHANNEL,
         }),
     )
     .await
@@ -2181,7 +3031,6 @@ fn save_window_preferences(app: AppHandle, preferences: WindowPreferences) -> Re
 #[tauri::command]
 fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
     match mode.as_str() {
-        "full" | "compact" => set_window_mode_internal(&app, &mode),
         "normal" => app
             .get_webview_window(MAIN_WINDOW_LABEL)
             .ok_or_else(|| "main window is not available".to_string())?
@@ -2202,10 +3051,7 @@ fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
             .ok_or_else(|| "main window is not available".to_string())?
             .set_fullscreen(true)
             .map_err(string_error),
-        _ => Err(
-            "window mode must be full, compact, normal, minimized, maximized, or fullscreen"
-                .to_string(),
-        ),
+        _ => Err("window mode must be normal, minimized, maximized, or fullscreen".to_string()),
     }
 }
 
@@ -2222,13 +3068,77 @@ fn set_always_on_top(app: AppHandle, always_on_top: bool) -> Result<(), String> 
     save_window_preferences_to_disk(&app, &preferences)
 }
 
+#[tauri::command]
+fn get_floating_window_preferences(app: AppHandle) -> FloatingWindowPreferences {
+    read_floating_window_preferences(&app)
+}
+
+#[tauri::command]
+fn show_floating_window(app: AppHandle) -> Result<(), String> {
+    show_floating_window_internal(&app)
+}
+
+#[tauri::command]
+fn hide_floating_window(app: AppHandle) -> Result<(), String> {
+    hide_floating_window_internal(&app)
+}
+
+#[tauri::command]
+fn toggle_floating_window(app: AppHandle) -> Result<(), String> {
+    toggle_floating_window_internal(&app)
+}
+
+#[tauri::command]
+fn open_task_from_floating(
+    app: AppHandle,
+    task_id: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if task_id <= 0 {
+        return Err("task id must be positive".to_string());
+    }
+    {
+        let mut pending = state.pending_floating_intent.lock().map_err(string_error)?;
+        *pending = Some(FloatingIntent {
+            view: "tasks".to_string(),
+            task_id: Some(task_id),
+        });
+    }
+    show_or_create_main_window(&app);
+    let _ = app.emit("floating-intent-available", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn open_focus_from_floating(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut pending = state.pending_floating_intent.lock().map_err(string_error)?;
+        *pending = Some(FloatingIntent {
+            view: "focus".to_string(),
+            task_id: None,
+        });
+    }
+    show_or_create_main_window(&app);
+    let _ = app.emit("floating-intent-available", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn take_pending_floating_intent(
+    state: State<'_, AppState>,
+) -> Result<Option<FloatingIntent>, String> {
+    let mut pending = state.pending_floating_intent.lock().map_err(string_error)?;
+    Ok(pending.take())
+}
+
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let compact = MenuItem::with_id(app, "compact", "Compact mode", true, None::<&str>)?;
+    let focus = MenuItem::with_id(app, "focus", "Focus", true, None::<&str>)?;
+    let floating = MenuItem::with_id(app, "floating", "悬浮窗", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let release_ui = MenuItem::with_id(app, "release_ui", "Release UI", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &compact, &hide, &release_ui, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &focus, &floating, &hide, &release_ui, &quit])?;
 
     TrayIconBuilder::with_id("main-tray")
         .icon(
@@ -2240,9 +3150,19 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_or_create_main_window(app),
-            "compact" => {
-                let _ = set_window_mode_internal(app, "compact");
+            "focus" => {
+                let state = app.state::<AppState>();
+                if let Ok(mut pending) = state.pending_floating_intent.lock() {
+                    *pending = Some(FloatingIntent {
+                        view: "focus".to_string(),
+                        task_id: None,
+                    });
+                }
                 show_or_create_main_window(app);
+                let _ = app.emit("floating-intent-available", ());
+            }
+            "floating" => {
+                let _ = toggle_floating_window_internal(app);
             }
             "hide" => {
                 let _ = hide_main_window(app);
@@ -2299,6 +3219,9 @@ pub fn run() {
                 ui_rebuild_in_progress: AtomicBool::new(false),
                 next_reminder_warning_id: AtomicU64::new(1),
                 scheduled_reminder_retry_at_unix_ms: AtomicI64::new(0),
+                pomodoro_wake_generation: AtomicU64::new(0),
+                pomodoro_operation_lock: Mutex::new(()),
+                pending_floating_intent: Mutex::new(None),
             });
             install_activation_listener(app);
             queue_current_activation(app);
@@ -2308,8 +3231,12 @@ pub fn run() {
                 let preferences = read_window_preferences(app.handle());
                 apply_window_preferences(&window, &preferences).map_err(std::io::Error::other)?;
                 install_close_to_tray_behavior(&window);
+                install_main_window_tracking(app.handle(), &window);
                 show_existing_window(&window).map_err(std::io::Error::other)?;
             }
+
+            let pomodoro_app = app.handle().clone();
+            thread::spawn(move || restore_pomodoro_for_app(&pomodoro_app));
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -2351,6 +3278,8 @@ pub fn run() {
             acknowledge_reliability_incidents,
             claim_pending_activations,
             acknowledge_pending_activations,
+            claim_pending_pomodoro_activations,
+            acknowledge_pending_pomodoro_activations,
             claim_pending_reminder_warnings,
             acknowledge_reminder_warnings,
             record_ui_not_ready,
@@ -2364,7 +3293,23 @@ pub fn run() {
             hide_to_tray,
             release_ui,
             set_window_mode,
-            set_always_on_top
+            set_always_on_top,
+            get_floating_window_preferences,
+            show_floating_window,
+            hide_floating_window,
+            toggle_floating_window,
+            open_task_from_floating,
+            open_focus_from_floating,
+            take_pending_floating_intent,
+            get_pomodoro,
+            get_pomodoro_view,
+            update_pomodoro_settings,
+            start_pomodoro,
+            pause_pomodoro,
+            resume_pomodoro,
+            skip_pomodoro,
+            reset_pomodoro,
+            list_pomodoro_task_summaries
         ])
         .run(tauri::generate_context!())
         .expect("error while running StarToDo");
@@ -2373,6 +3318,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_window_preferences_migrate_to_adaptive() {
+        let decoded = decode_window_preferences(
+            r#"{"mode":"compact","width":380,"height":520,"alwaysOnTop":true}"#,
+        )
+        .unwrap();
+        assert!(decoded.migrated);
+        assert_eq!(decoded.preferences.layout, WindowLayout::Adaptive);
+        assert!(!decoded.preferences.maximized);
+        assert_eq!(decoded.preferences.normal_bounds.width, 520);
+        assert_eq!(decoded.preferences.normal_bounds.height, 520);
+        assert!(decoded.preferences.always_on_top);
+    }
+
+    #[test]
+    fn full_window_preferences_migrate_to_maximized_adaptive() {
+        let decoded = decode_window_preferences(
+            r#"{"mode":"full","width":800,"height":600,"alwaysOnTop":false}"#,
+        )
+        .unwrap();
+        assert!(decoded.migrated);
+        assert_eq!(decoded.preferences.layout, WindowLayout::Adaptive);
+        assert!(decoded.preferences.maximized);
+        assert_eq!(decoded.preferences.normal_bounds.width, 800);
+        assert_eq!(decoded.preferences.normal_bounds.height, 600);
+    }
+
+    #[test]
+    fn adaptive_window_preferences_reject_too_small_bounds() {
+        let preferences = WindowPreferences {
+            normal_bounds: WindowBounds {
+                width: 519,
+                height: 420,
+                ..WindowBounds::default()
+            },
+            ..WindowPreferences::default()
+        };
+        assert_eq!(
+            validate_window_preferences(&preferences).unwrap_err(),
+            "window width must be between 520 and 7680"
+        );
+    }
 
     #[test]
     fn migrations_are_idempotent() {
@@ -2397,6 +3385,8 @@ mod tests {
                 TASK_RECURRENCE_MIGRATION_VERSION,
                 PROJECTS_AND_RELIABILITY_MIGRATION_VERSION,
                 REMINDER_DELIVERY_RETRY_MIGRATION_VERSION,
+                POMODORO_MIGRATION_VERSION,
+                POMODORO_ACTIVATION_INBOX_MIGRATION_VERSION,
             ]
         );
     }
@@ -2685,7 +3675,7 @@ mod tests {
             )
             .expect("tasks table should exist");
         assert_eq!(probe, (7, 99));
-        assert_eq!(version_count, 7);
+        assert_eq!(version_count, 9);
         let recurrence_column_exists: bool = connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'recurrence_kind')",
@@ -2872,7 +3862,7 @@ mod tests {
             .expect("migration versions should query")
             .collect::<rusqlite::Result<_>>()
             .expect("migration versions should decode");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]
@@ -3223,7 +4213,157 @@ mod tests {
             .expect("migration versions should query")
             .collect::<rusqlite::Result<_>>()
             .expect("migration versions should collect");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn v7_database_upgrades_to_v9_with_pomodoro_foreign_key_partial_unique_index_and_activation_inbox(
+    ) {
+        let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                );
+                INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7);
+                CREATE TABLE tasks (
+                    id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    planned_date TEXT,
+                    due_at_unix_ms INTEGER,
+                    reminder_at_unix_ms INTEGER,
+                    reminder_fired_at_unix_ms INTEGER,
+                    deleted_at_unix_ms INTEGER,
+                    project_id INTEGER,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    recurrence_kind TEXT,
+                    recurrence_series_id INTEGER,
+                    recurrence_source_task_id INTEGER,
+                    recurrence_timezone TEXT,
+                    recurrence_dst_policy TEXT,
+                    completed_at_unix_ms INTEGER,
+                    created_at_unix_ms INTEGER NOT NULL,
+                    updated_at_unix_ms INTEGER NOT NULL
+                );
+                CREATE TABLE reminder_deliveries (
+                    id TEXT PRIMARY KEY,
+                    task_id INTEGER NOT NULL,
+                    reminder_at_unix_ms INTEGER NOT NULL,
+                    activation_token_hash BLOB NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at_unix_ms INTEGER NOT NULL,
+                    scheduled_at_unix_ms INTEGER,
+                    activated_at_unix_ms INTEGER,
+                    generation INTEGER NOT NULL DEFAULT 0,
+                    activation_uri_hash BLOB
+                );
+                CREATE TABLE stage0_probe (id INTEGER PRIMARY KEY, run_count INTEGER NOT NULL, last_probe_at_unix_ms INTEGER NOT NULL);
+                ",
+            )
+            .expect("v7 fixture should be created");
+        apply_migrations(&mut connection).expect("v7 database should upgrade to v9");
+
+        let versions: Vec<i64> = connection
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .expect("versions should prepare")
+            .query_map([], |row| row.get(0))
+            .expect("versions should query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("versions should collect");
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        let foreign_key_target: String = connection
+            .query_row(
+                "SELECT \"table\" FROM pragma_foreign_key_list('pomodoro_sessions') WHERE \"from\" = 'task_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pomodoro task foreign key should exist");
+        assert_eq!(foreign_key_target, "tasks");
+        let partial_index_sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_pomodoro_one_active_session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("active-session partial index should exist");
+        assert!(partial_index_sql.contains("WHERE status IN ('running', 'paused')"));
+        let activation_inbox_index: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_pomodoro_activation_inbox_claimable'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("activation inbox claimable index should exist");
+        assert!(activation_inbox_index.contains("acknowledged_at_unix_ms"));
+        connection
+            .execute(
+                "INSERT INTO pomodoro_sessions (phase, status, planned_duration_seconds, started_at_unix_ms, target_ends_at_unix_ms, created_at_unix_ms, updated_at_unix_ms) VALUES ('focus', 'running', 60, 1, 2, 1, 1)",
+                [],
+            )
+            .expect("first active session should insert");
+        assert!(connection
+            .execute(
+                "INSERT INTO pomodoro_sessions (phase, status, planned_duration_seconds, started_at_unix_ms, target_ends_at_unix_ms, created_at_unix_ms, updated_at_unix_ms) VALUES ('shortBreak', 'running', 60, 1, 2, 1, 1)",
+                [],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn v8_database_upgrades_to_v9_activation_inbox_idempotently() {
+        let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+        apply_migrations(&mut connection).expect("base migrations should succeed");
+        connection
+            .execute_batch(
+                "
+                DROP INDEX idx_pomodoro_activation_inbox_claimable;
+                DROP TABLE pomodoro_activation_inbox;
+                DELETE FROM schema_migrations WHERE version = 9;
+                ",
+            )
+            .expect("v9 artifacts should be removable for v8 fixture");
+
+        apply_migrations(&mut connection).expect("v8 database should upgrade to v9");
+        apply_migrations(&mut connection).expect("v9 migration should be idempotent");
+
+        let inbox_columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info('pomodoro_activation_inbox') ORDER BY cid")
+            .expect("activation inbox columns should query")
+            .query_map([], |row| row.get(0))
+            .expect("activation inbox columns should decode")
+            .collect::<rusqlite::Result<_>>()
+            .expect("activation inbox columns should collect");
+        assert_eq!(
+            inbox_columns,
+            vec![
+                "id",
+                "session_id",
+                "received_at_unix_ms",
+                "claimed_by",
+                "claim_expires_at_unix_ms",
+                "acknowledged_at_unix_ms",
+            ]
+        );
+        let index_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_pomodoro_activation_inbox_claimable'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("activation inbox index should query");
+        assert_eq!(index_count, 1);
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("migration count should query");
+        assert_eq!(migration_count, 9);
     }
 
     #[test]
@@ -3234,8 +4374,8 @@ mod tests {
         let second = execute_database_probe(&mut connection, Path::new(":memory:"))
             .expect("second probe should succeed");
 
-        assert_eq!(first.migration_count, 7);
-        assert_eq!(second.migration_count, 7);
+        assert_eq!(first.migration_count, 9);
+        assert_eq!(second.migration_count, 9);
         assert_eq!(first.run_count, 1);
         assert_eq!(second.run_count, 2);
         assert!(second.last_probe_at_unix_ms >= first.last_probe_at_unix_ms);
