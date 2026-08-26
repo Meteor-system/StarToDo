@@ -1,10 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import type { ReminderReport } from '$lib/tasks';
-  import { enterImmersiveMode, exitImmersiveMode, setMainWindowMaximized, setAlwaysOnTop } from '$lib/windowing';
+  import { setAlwaysOnTop } from '$lib/windowing';
 
-  type WindowMode = 'normal' | 'maximized' | 'fullscreen';
-  type ActionKey = 'snapshot' | 'metrics' | 'database' | 'notifications' | 'testNotification' | 'scheduleNotification' | 'cancelNotification' | 'tray' | 'release' | 'alwaysOnTop' | 'windowMode' | 'reminderResync';
+  type ActionKey = 'snapshot' | 'metrics' | 'database' | 'notifications' | 'testNotification' | 'scheduleNotification' | 'cancelNotification' | 'tray' | 'release' | 'alwaysOnTop' | 'reminderResync';
   type JsonPrimitive = string | number | boolean | null;
   type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
   type JsonRecord = { [key: string]: JsonValue };
@@ -13,26 +12,24 @@
   interface Props {
     tauriAvailable: boolean;
     uiRunId: string;
-    mode: WindowMode;
     initialAlwaysOnTop: boolean;
     activationId: number | null;
     activationError: string | null;
     initialSnapshot: JsonRecord | null;
-    onModeChange: (mode: WindowMode) => void;
     latestReminderReport: ReminderReport | null;
     reminderSyncedAt: number | null;
     reminderWarningListenerToken: number | null;
     onReminderReconcile: () => Promise<ReminderReport>;
   }
 
-  let { tauriAvailable, uiRunId, mode, initialAlwaysOnTop, activationId, activationError, initialSnapshot, latestReminderReport, reminderSyncedAt, reminderWarningListenerToken, onModeChange, onReminderReconcile }: Props = $props();
+  let { tauriAvailable, uiRunId, initialAlwaysOnTop, activationId, activationError, initialSnapshot, latestReminderReport, reminderSyncedAt, reminderWarningListenerToken, onReminderReconcile }: Props = $props();
   const emptyAction = (): ActionState => ({ busy: false, error: null, success: null });
   let alwaysOnTop = $state(false);
   let runtimeSnapshot = $state<JsonRecord | null>(null);
   let metrics = $state<JsonRecord | null>(null);
   let database = $state<JsonRecord | null>(null);
   let notifications = $state<JsonRecord | null>(null);
-  let actions = $state<Record<ActionKey, ActionState>>({ snapshot: emptyAction(), metrics: emptyAction(), database: emptyAction(), notifications: emptyAction(), testNotification: emptyAction(), scheduleNotification: emptyAction(), cancelNotification: emptyAction(), tray: emptyAction(), release: emptyAction(), alwaysOnTop: emptyAction(), windowMode: emptyAction(), reminderResync: emptyAction() });
+  let actions = $state<Record<ActionKey, ActionState>>({ snapshot: emptyAction(), metrics: emptyAction(), database: emptyAction(), notifications: emptyAction(), testNotification: emptyAction(), scheduleNotification: emptyAction(), cancelNotification: emptyAction(), tray: emptyAction(), release: emptyAction(), alwaysOnTop: emptyAction(), reminderResync: emptyAction() });
   $effect(() => { runtimeSnapshot = initialSnapshot; alwaysOnTop = initialAlwaysOnTop; });
   const entries = (value: JsonRecord | null): Array<[string, JsonValue]> => value ? Object.entries(value) : [];
   const format = (value: JsonValue): string => value === null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -68,19 +65,6 @@
       return;
     }
     await run<void>('release', 'release_ui', { listenerToken: reminderWarningListenerToken });
-  }
-  async function changeMode(next: WindowMode): Promise<void> {
-    if (next === mode) return;
-    setAction('windowMode', { busy: true, error: null, success: null });
-    try {
-      if (next === 'fullscreen') await enterImmersiveMode();
-      else if (mode === 'fullscreen') await exitImmersiveMode();
-      if (next === 'normal' || next === 'maximized') await setMainWindowMaximized(next === 'maximized');
-      setAction('windowMode', { busy: false, success: '已完成。' });
-      onModeChange(next);
-    } catch (error) {
-      setAction('windowMode', { busy: false, error: message(error) });
-    }
   }
   async function resyncReminders(): Promise<void> {
     if (!tauriAvailable) {
@@ -122,7 +106,7 @@
 <details class:compact={false} class="diagnostics">
   <summary>诊断与桌面控制</summary>
   <div class="content">
-    <div class="overview"><div><span class="label">UI RUN</span><code>{uiRunId}</code></div><div class="segmented" aria-label="窗口模式"><button class:active={mode === 'normal'} onclick={() => void changeMode('normal')} disabled={actions.windowMode.busy}>普通</button><button class:active={mode === 'maximized'} onclick={() => void changeMode('maximized')} disabled={actions.windowMode.busy}>最大化</button><button class:active={mode === 'fullscreen'} onclick={() => void changeMode('fullscreen')} disabled={actions.windowMode.busy}>全屏</button></div></div>
+    <div class="overview"><div><span class="label">UI RUN</span><code>{uiRunId}</code></div></div>
     <section class="panel"><div class="panel-heading"><h3>运行时快照</h3><button aria-label="刷新运行时快照" onclick={refreshSnapshot} disabled={actions.snapshot.busy}>{actions.snapshot.busy ? '读取中…' : '刷新'}</button></div>{#if entries(runtimeSnapshot).length}<dl>{#each entries(runtimeSnapshot) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>等待首次运行时快照。</p>{/if}{#if actions.snapshot.error}<p class="error" role="alert">{actions.snapshot.error}</p>{/if}</section>
     <div class="grid"><section class="panel"><div class="panel-heading"><h3>进程采样</h3><button onclick={sampleMetrics} disabled={actions.metrics.busy}>{actions.metrics.busy ? '采样中…' : '采样'}</button></div>{#if entries(metrics).length}<dl>{#each entries(metrics) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>读取当前进程指标。</p>{/if}{#if actions.metrics.error}<p class="error" role="alert">{actions.metrics.error}</p>{/if}</section>
       {#if true}<section class="panel"><div class="panel-heading"><h3>SQLite 探测</h3><button onclick={probeDatabase} disabled={actions.database.busy}>{actions.database.busy ? '探测中…' : '运行探测'}</button></div>{#if entries(database).length}<dl>{#each entries(database) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>验证数据库文件、连接与基础读写能力。</p>{/if}{#if actions.database.error}<p class="error" role="alert">{actions.database.error}</p>{/if}</section>
@@ -142,9 +126,6 @@
   .overview,.panel-heading,footer,.actions { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .label { display:block; margin-bottom:4px; font-size:10px; letter-spacing:.1em; }
   code { color:var(--text-soft); font-size:11px; }
-  .segmented { display:flex; border:1px solid var(--line); border-radius:var(--radius-sm); }
-  .segmented button { border:0; border-radius:0; }
-  .segmented .active { color:#07111f; background:var(--info); }
   .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
   .panel { padding:14px 0; border-bottom:1px solid var(--line); }
   .panel h3 { margin:0; color:var(--text-soft); font-size:12px; }

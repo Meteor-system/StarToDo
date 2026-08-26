@@ -6,7 +6,9 @@
   import FocusWorkspace from '$lib/components/FocusWorkspace.svelte';
   import FocusMiniBar from '$lib/components/FocusMiniBar.svelte';
   import FloatingWindow from '$lib/components/FloatingWindow.svelte';
-  import DiagnosticsPanel from '$lib/components/DiagnosticsPanel.svelte';
+  import AppShell from '$lib/components/AppShell.svelte';
+  import DiagnosticsDrawer from '$lib/components/DiagnosticsDrawer.svelte';
+  import type { AppScene, ImmersiveDisplayState, ShellDrawer, ToastMessage } from '$lib/ui-state';
   import {
     acknowledgePendingPomodoroActivations,
     claimPendingPomodoroActivations,
@@ -39,10 +41,7 @@
     type ReminderWarningContext,
     type ReminderWarningEvent
   } from '$lib/tasks';
-  import { toggleFloatingWindow, type WindowPreferences } from '$lib/windowing';
-
-  type WindowMode = 'normal' | 'maximized' | 'fullscreen';
-  type AppView = 'tasks' | 'focus';
+  import { toggleFloatingWindow } from '$lib/windowing';
   type JsonPrimitive = string | number | boolean | null;
   type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
   type JsonRecord = { [key: string]: JsonValue };
@@ -64,7 +63,6 @@
   let reminderWarningListenerToken = $state<number | null>(null);
   let initialized = $state(false);
   let runtimeSnapshot = $state<JsonRecord | null>(null);
-  let windowMode = $state<WindowMode>('maximized');
   let alwaysOnTop = $state(false);
   let notificationActivationId = $state<number | null>(null);
   let notificationActivationNonce = $state(0);
@@ -81,7 +79,10 @@
   let floatingWindowError = $state<string | null>(null);
   let reminderReconcileSequence = 0;
   let inFlightReminderReconcile: Promise<ReminderReport> | null = null;
-  let activeView = $state<AppView>('tasks');
+  let activeScene = $state<AppScene>('tasks');
+  let openDrawer = $state<ShellDrawer>(null);
+  let immersiveDisplay = $state<ImmersiveDisplayState>('off');
+  let toasts = $state<ToastMessage[]>([]);
   let pomodoroSnapshot = $state<PomodoroSnapshot | null>(null);
   let pomodoroTaskSummaries = $state<PomodoroTaskSummary[]>([]);
   let pomodoroBusy = $state(false);
@@ -160,7 +161,7 @@
 
   function selectFocusTask(taskId: number): void {
     selectedFocusTaskId = taskId;
-    activeView = 'focus';
+    activeScene = 'focus';
   }
 
   function handlePomodoroTasksChanged(unavailableTaskId?: number): void {
@@ -186,12 +187,12 @@
   ): Promise<void> {
     if (isDisposed()) return;
     if (intent.view === 'focus') {
-      activeView = 'focus';
+      activeScene = 'focus';
       await refreshPomodoro(isDisposed);
       return;
     }
     if (intent.view === 'tasks' && intent.taskId !== null) {
-      activeView = 'tasks';
+      activeScene = 'tasks';
       const nonce = handleActivationId(intent.taskId);
       if (nonce !== null) await tick();
     }
@@ -382,7 +383,7 @@
           return;
         }
 
-        activeView = 'focus';
+        activeScene = 'focus';
         if (!await refreshPomodoro(isDisposed) || isDisposed()) return;
 
         const result = await acknowledgePendingPomodoroActivations(uiRunId, [activation.id]);
@@ -441,10 +442,6 @@
       });
     inFlightReminderReconcile = flight;
     return flight;
-  }
-
-  function handleModeChange(mode: WindowMode): void {
-    windowMode = mode;
   }
 
   async function resyncReminders(): Promise<void> {
@@ -628,22 +625,6 @@
       if (!disposed) await registerReminderWarningListener();
     })();
 
-    void (async () => {
-      try {
-        const preferences = await invoke<WindowPreferences>('get_window_preferences');
-        if (!disposed) {
-          windowMode = preferences.lastImmersive
-            ? 'fullscreen'
-            : preferences.maximized
-              ? 'maximized'
-              : 'normal';
-          alwaysOnTop = preferences.alwaysOnTop;
-        }
-      } catch (error) {
-        if (!disposed) notificationActivationError = `窗口偏好读取失败：${errorMessage(error)}`;
-      }
-    })();
-
     return () => {
       disposed = true;
       activationPageDisposed = true;
@@ -679,17 +660,19 @@
 {#if windowKind === 'floating'}
   <FloatingWindow {tauriAvailable} />
 {:else}
-<main aria-labelledby="page-title">
-  <header class="topbar">
-    <div class="identity"><span class="mark" aria-hidden="true"></span><div><p class="eyebrow">STAR TODO</p><h1 id="page-title">{activeView === 'focus' ? '专注' : '任务'}</h1></div></div>
-    <div class="shell-actions">
-      <p class="status" aria-live="polite"><span class:offline={!tauriAvailable} class="status-dot"></span>{#if !initialized}正在初始化{:else if tauriAvailable}已连接{:else}浏览器预览{/if}</p>
-      <button type="button" onclick={handleToggleFloatingWindow} disabled={!tauriAvailable || floatingWindowBusy}>
-        {floatingWindowBusy ? '…' : '悬浮窗'}
-      </button>
-      {#if floatingWindowError}<p class="error" role="alert">{floatingWindowError}</p>{/if}
-    </div>
-  </header>
+<AppShell
+  activeScene={activeScene}
+  {openDrawer}
+  {immersiveDisplay}
+  {initialized}
+  {tauriAvailable}
+  {toasts}
+  onSceneChange={(scene) => { activeScene = scene; }}
+  onOpenDiagnostics={() => openDrawer = 'diagnostics'}
+  onCloseDrawer={() => openDrawer = null}
+  onToggleFloating={handleToggleFloatingWindow}
+>
+  {#snippet children()}
   {#if reconcileWarning || mutationWarnings.length || missedCount}
     <section class="page-alert" aria-live="polite">
       {#if reconcileWarning}<p>提醒同步警告：{reconcileWarning}</p>{/if}
@@ -700,20 +683,20 @@
       <button onclick={resyncReminders} disabled={reminderResyncBusy}>{reminderResyncBusy ? '同步中…' : '重新同步提醒'}</button>
     </section>
   {/if}
-  {#if tauriAvailable && activeView === 'tasks'}
+  {#if tauriAvailable && activeScene === 'tasks'}
     <FocusMiniBar
       {tauriAvailable}
       snapshot={pomodoroSnapshot}
       compact={false}
       busy={pomodoroBusy}
       warning={pomodoroWarning}
-      onOpenFocus={() => activeView = 'focus'}
+      onOpenFocus={() => { activeScene = 'focus'; }}
       onPause={() => runPomodoroCommand(pausePomodoro)}
       onResume={() => runPomodoroCommand(resumePomodoro)}
     />
   {/if}
 
-  {#if activeView === 'focus'}
+  {#if activeScene === 'focus'}
     <FocusWorkspace
       {tauriAvailable}
       snapshot={pomodoroSnapshot}
@@ -730,7 +713,7 @@
     />
   {/if}
 
-  {#if activeView === 'tasks'}
+  {#if activeScene === 'tasks'}
     <TaskWorkspace
       {tauriAvailable}
       {initialized}
@@ -745,27 +728,25 @@
       onActivationResolved={acknowledgeResolvedActivation}
     />
   {/if}
-  <nav class="primary-nav" aria-label="主导航">
-    <button type="button" class:active={activeView === 'tasks'} aria-current={activeView === 'tasks' ? 'page' : undefined} onclick={() => activeView = 'tasks'}>任务</button>
-    <button type="button" class:active={activeView === 'focus'} aria-current={activeView === 'focus' ? 'page' : undefined} onclick={() => activeView = 'focus'}>专注</button>
-  </nav>
-  <DiagnosticsPanel
-    {tauriAvailable}
-    {uiRunId}
-    mode={windowMode}
-    initialAlwaysOnTop={alwaysOnTop}
-    activationId={notificationActivationId}
-    activationError={notificationActivationError}
-    initialSnapshot={runtimeSnapshot}
-    {latestReminderReport}
-    {reminderSyncedAt}
-    {reminderWarningListenerToken}
-    onModeChange={handleModeChange}
-    onReminderReconcile={requestReminderReconcile}
-  />
-</main>
+  {/snippet}
+  {#snippet diagnosticsContent()}
+    <button type="button" class="legacy-diagnostics-trigger" onclick={() => openDrawer = 'diagnostics'}>诊断与桌面控制</button>
+  <details open>
+    <summary>诊断与桌面控制</summary>
+  <DiagnosticsDrawer
+      {tauriAvailable}
+      {uiRunId}
+      initialAlwaysOnTop={alwaysOnTop}
+      activationId={notificationActivationId}
+      activationError={notificationActivationError}
+      initialSnapshot={runtimeSnapshot}
+      {latestReminderReport}
+      {reminderSyncedAt}
+      {reminderWarningListenerToken}
+      onReminderReconcile={requestReminderReconcile}
+    />
+  </details>
+  {/snippet}
+</AppShell>
 {/if}
 
-<style>
-  main { position:relative; width:min(100%, 920px); min-height:100vh; margin:0 auto; padding:18px clamp(14px, 4vw, 36px) 26px; background:linear-gradient(135deg, rgba(31,34,39,.88), rgba(17,18,20,.98)); border-inline:1px solid rgba(255,255,255,.05); }.topbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-bottom:50px; border-bottom:1px solid var(--line); }.identity,.shell-actions,.status { display:flex; align-items:center; }.identity { gap:11px; }.shell-actions { gap:16px; }.shell-actions button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:5px 8px; color:var(--text-soft); background:var(--surface); font-size:12px; }.shell-actions button:hover:not(:disabled) { border-color:var(--text-soft); background:var(--surface-hover); color:var(--text); }.shell-actions .error { margin:0; color:var(--danger); font-size:11px; }.mark { width:9px; height:9px; border-radius:50%; background:var(--info); box-shadow:0 0 16px rgba(91,169,255,.62); }.eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; } h1 { margin:3px 0 0; font-size:20px; font-weight:640; }.primary-nav { position:absolute; z-index:1; top:62px; left:clamp(14px, 4vw, 36px); display:flex; gap:3px; padding:3px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface); }.primary-nav button { border:0; border-radius:3px; padding:5px 9px; color:var(--muted); background:transparent; font-size:12px; }.primary-nav button.active { color:var(--text); background:var(--surface-hover); }.status { gap:7px; margin:0; color:var(--muted); font-size:12px; }.status-dot { width:7px; height:7px; border-radius:50%; background:var(--success); }.status-dot.offline { background:var(--warning, #e0ad65); }.page-alert { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; padding:10px 11px; color:#f2d5a1; background:rgba(224,173,101,.09); border-left:2px solid #e0ad65; font-size:12px; }.page-alert p { margin:0; line-height:1.5; }.page-alert button { flex:none; border:1px solid rgba(224,173,101,.45); border-radius:var(--radius-sm); padding:5px 8px; color:#f2d5a1; background:transparent; font-size:11px; } @media (max-width:620px) { main { padding-inline:14px; }.topbar { align-items:flex-start; }.shell-actions { align-items:flex-end; flex-direction:column-reverse; gap:8px; }.page-alert { align-items:flex-start; flex-direction:column; } } @media (max-width:360px) { .topbar { gap:8px; }.status { font-size:11px; }.primary-nav button { padding-inline:7px; } }
-</style>
