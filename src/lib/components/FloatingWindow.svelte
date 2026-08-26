@@ -359,9 +359,11 @@
   });
 </script>
 
+<!-- svelte-ignore a11y_no_redundant_roles: binding brief requires the explicit region role. -->
 <section
   bind:this={root}
   class="floating-window"
+  role="region"
   aria-label="StarToDo 悬浮窗"
   data-display-mode={display.mode}
   onpointerenter={() => dispatchFloating({ type: 'pointer-enter', at: Date.now() })}
