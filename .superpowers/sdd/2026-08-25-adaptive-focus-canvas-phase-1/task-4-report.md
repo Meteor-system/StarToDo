@@ -102,3 +102,24 @@ Correction commit: `Correct immersive bounds refresh and window toggle`
 Current source inspection confirms `enter_immersive_mode` performs enter-time capture at lines 3123–3134: normal windows read `inner_size`, `outer_position`, and `scale_factor`, then convert physical values through `WindowBounds::from_physical`; maximized windows retain persisted `normal_bounds`. The fullscreen call follows capture, and runtime restore state is written only after fullscreen succeeds. `changeAlwaysOnTop` contains exactly one `setAlwaysOnTop(enabled)` invocation and no generic `run` call.
 
 Fresh evidence: focused `immersive_restore` 2 passed; full Rust suite 74 passed; `cargo fmt --check` passed; `npm run check` passed with 0 errors and 0 warnings. No unrelated files were staged.
+
+## Fix Round 1 correction: enter-time restore refresh
+
+Implemented an explicit `select_immersive_restore_bounds` helper and regression test. `enter_immersive_mode` now reads persisted preferences, queries actual maximized/fullscreen state, captures current outer position and inner size for a normal window, converts physical values to logical `WindowBounds` using scale factor, and selects those current bounds for runtime restore. Maximized or fullscreen states retain persisted normal bounds. The required order remains capture, `set_fullscreen(true)`, runtime restore write, then `lastImmersive` persistence.
+
+Verification: focused `immersive_restore` tests passed 3/3; full Rust tests passed 75/75; `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed; `npm run check` passed with 0 errors and 0 warnings. Source inspection confirms no generic `set_window_mode` call and exactly one `setAlwaysOnTop` wrapper call.
+
+Correction commit: `Refresh immersive restore bounds at entry`
+
+## Fix Round 1 reviewer correction
+
+Revalidated the previously disputed source and retained the explicit enter-time refresh implementation. `enter_immersive_mode` queries maximized/fullscreen, captures current normal outer position and inner size, converts physical values to logical `WindowBounds` with scale factor, and passes those bounds through `select_immersive_restore_bounds`; persisted bounds are selected for maximized/fullscreen. Added the pure selection test covering normal, maximized, and fullscreen cases. Removed a duplicate test attribute found during verification.
+
+Exact verification:
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` — passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture` — 4 test executions reported passed (the duplicate attribute had caused duplicate discovery before cleanup).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 74 unique tests passed after duplicate-attribute cleanup.
+- `npm run check` — passed with 0 errors and 0 warnings.
+
+Self-review: fullscreen success precedes runtime restore-state write and `last_immersive` persistence; no Pomodoro/reminder/activation mutation. `changeAlwaysOnTop` has exactly one wrapper call. Unrelated files remain unstaged.

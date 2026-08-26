@@ -278,6 +278,19 @@ enum WindowRestoreTarget {
     Normal(WindowBounds),
 }
 
+fn select_immersive_restore_bounds(
+    maximized: bool,
+    fullscreen: bool,
+    persisted: &WindowBounds,
+    current: Option<WindowBounds>,
+) -> WindowBounds {
+    if !maximized && !fullscreen {
+        current.unwrap_or_else(|| persisted.clone())
+    } else {
+        persisted.clone()
+    }
+}
+
 impl ImmersiveRestoreState {
     fn restore_target(&self) -> WindowRestoreTarget {
         if self.maximized {
@@ -3120,14 +3133,20 @@ fn enter_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<Wi
     if fullscreen {
         return current_window_state(&app);
     }
-    let normal_bounds = if !maximized && !fullscreen {
+    let current_bounds = if !maximized && !fullscreen {
         let size = window.inner_size().map_err(string_error)?;
         let position = window.outer_position().map_err(string_error).ok();
         let scale_factor = window.scale_factor().map_err(string_error)?;
-        WindowBounds::from_physical(position, size, scale_factor)
+        Some(WindowBounds::from_physical(position, size, scale_factor))
     } else {
-        preferences.normal_bounds.clone()
+        None
     };
+    let normal_bounds = select_immersive_restore_bounds(
+        maximized,
+        fullscreen,
+        &preferences.normal_bounds,
+        current_bounds,
+    );
     let restore = ImmersiveRestoreState {
         maximized,
         normal_bounds,
@@ -3461,6 +3480,34 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immersive_restore_bounds_prefer_current_only_when_window_is_normal() {
+        let persisted = WindowBounds {
+            x: Some(1),
+            y: Some(2),
+            width: 500,
+            height: 400,
+        };
+        let current = WindowBounds {
+            x: Some(30),
+            y: Some(40),
+            width: 900,
+            height: 700,
+        };
+        assert_eq!(
+            select_immersive_restore_bounds(false, false, &persisted, Some(current.clone())),
+            current
+        );
+        assert_eq!(
+            select_immersive_restore_bounds(true, false, &persisted, Some(current.clone())),
+            persisted
+        );
+        assert_eq!(
+            select_immersive_restore_bounds(false, true, &persisted, Some(current)),
+            persisted
+        );
+    }
 
     #[test]
     fn physical_window_bounds_convert_to_logical_coordinates() {
