@@ -67,6 +67,14 @@
 - Minimal fix: warning text participates in the Pomodoro toast ID, `dismissedToastIds` is consulted, and `onDismiss` is supplied. Dismissing A does not swallow B. Backend/Pomodoro persistence is unchanged.
 - Gates: full Playwright 31/31 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings. Controller native retest of the close control remains pending; no native GREEN is claimed for this third finding.
 
+## Fourth native Important — floating WebView deactivation
+
+- Controller native RED: active Pomodoro showed a real 340 x 64 capsule. Focusing `展开悬浮窗` alone expanded it to native 360 x 260 and restored logical focus. Bringing the main WebView2 page to front and focusing the real search textbox transferred OS/WebView focus, but floating `document.activeElement` stayed inside. No root `focusout` fired, so after 5,800 ms mode/preferences remained `interaction-expanded`/expanded and visible.
+- Root cause: focus ownership was cleared only by bubbling DOM `focusout`. WebView window deactivation does not necessarily change its DOM active element, leaving reducer `focusInside=true` indefinitely.
+- E2E TDD: valid RED exited 1 because dispatching floating `window.blur` still left the region `interaction-expanded` after its collapse deadline. GREEN first proves keyboard focus keeps expansion past 5,700 ms, dispatches window blur while the restored DOM control remains focused, then observes capsule after the 700 ms leave buffer. Existing failed-logical-focus coverage remains binding; focused set 3/3 passed in 9.2 s with browser-error hooks.
+- Minimal fix: mounted floating route listens to `window.blur`, clears `pendingFocusRestore`, increments `focusRestoreSequence` to invalidate an in-flight restoration, and dispatches the existing reducer `focus-out` event at `Date.now()`. Destroy unregisters the listener and invalidates restoration. Pointer ownership and reducer interaction/leave deadlines are unchanged.
+- Gates: full Playwright 32/32 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings. Actual two-WebView controller retest remains pending; no native GREEN is claimed for this fourth finding.
+
 ## Windows smoke
 
 - Environment observed: Windows 11 Pro 10.0.26200 build 26200, 64-bit; one active 2560 x 1440 AOC display at 180 Hz and 100%/96 DPI; NVIDIA RTX 3060.
@@ -91,6 +99,7 @@
 - Ruling: Prevent only implicit `ExitRequested` events with `code=None` — Release UI must preserve the tray/single-instance process, while explicit tray Quit uses `app.exit(0)` and must terminate — cost if wrong: another legitimate no-code exit source could be held open; current product authority treats no-code last-window exit as implicit and coded exit as explicit.
 - Ruling: Test the exit decision as a pure code policy and leave same-PID recreation to isolated native smoke — Tauri runner APIs are integration boundaries and process identity cannot be proven by a unit test — cost if wrong: unit GREEN may not reflect a platform-specific event variant, hence controller native GREEN remains mandatory.
 - Ruling: Key Pomodoro toast dismissal by the complete warning value — current warning sources expose meaningful string changes but no independent warning epoch, and message-specific identity dismisses only the observed warning — cost if wrong: an identical later warning is intentionally still considered the same current warning and remains dismissed until its value changes away and back through future state-model work.
+- Ruling: Treat floating `window.blur` as loss of keyboard focus ownership while preserving pointer state — native WebView deactivation can retain DOM activeElement, and the reducer already combines independent pointer/focus ownership — cost if wrong: an unusual transient blur while the pointer remains outside arms the standard 700 ms bounded collapse, while pointer-inside still prevents collapse.
 
 ## Deferred Minors and blockers
 

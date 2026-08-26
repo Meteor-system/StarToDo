@@ -388,6 +388,12 @@
     dispatchFloating({ type: 'focus-out', at: Date.now() });
   }
 
+  function handleWindowBlur(): void {
+    pendingFocusRestore = null;
+    ++focusRestoreSequence;
+    dispatchFloating({ type: 'focus-out', at: Date.now() });
+  }
+
   function initializeRuntime(): void {
     if (runtimeInitialized || disposed || !isTauriRuntime()) return;
     runtimeInitialized = true;
@@ -446,6 +452,7 @@
     document.body.style.minWidth = '0';
     document.body.style.overflow = 'hidden';
 
+    window.addEventListener('blur', handleWindowBlur);
     scheduleCollapse();
     requestSizeSync(floatingSizeMode(display.mode));
     clockTimer = window.setInterval(() => { nowUnixMs = Date.now(); }, 1_000);
@@ -454,6 +461,9 @@
 
   onDestroy(() => {
     disposed = true;
+    window.removeEventListener('blur', handleWindowBlur);
+    pendingFocusRestore = null;
+    ++focusRestoreSequence;
     ++taskRefreshSequence;
     pomodoroCoordination = beginPomodoroOperation(pomodoroCoordination).state;
     if (clockTimer !== undefined) window.clearInterval(clockTimer);

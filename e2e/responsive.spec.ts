@@ -212,6 +212,30 @@ test('keyboard focus inside keeps the active companion expanded past its deadlin
   await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
 });
 
+test('window blur releases keyboard focus ownership after the interaction buffer', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-08-27T12:00:00+08:00') });
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  await page.getByRole('button', { name: '展开悬浮窗' }).focus();
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  const focusedTarget = page.getByRole('button', { name: '隐藏悬浮窗' });
+  await expect(focusedTarget).toBeFocused();
+
+  await page.clock.fastForward(5_700);
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  await expect(focusedTarget).toBeFocused();
+
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(focusedTarget).toBeFocused();
+  await page.clock.fastForward(699);
+  await page.clock.fastForward(1);
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+});
+
 test('failed logical focus restoration arms bounded collapse', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-08-25T12:00:00Z') });
   await installActiveFloatingTauriMock(page);
