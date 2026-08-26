@@ -1,0 +1,58 @@
+# Task 4 implementation report
+
+## RED
+
+Requested command: `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture`.
+
+The immersive restore tests are present and pass in the completed implementation. The missing-type RED output was not captured in this resumed session because the implementation had already been applied before inspection.
+
+## GREEN / verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml` — completed successfully.
+- `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture` — 2 passed, 0 failed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 73 passed, 0 failed.
+- `npm run check` — completed successfully; 0 errors and 0 warnings.
+
+## Files and behavior
+
+- `src-tauri/src/lib.rs`: added `ImmersiveRestoreState`, `WindowRestoreTarget`, `WindowState`, runtime restore storage, and explicit `get_window_state`, `enter_immersive_mode`, `exit_immersive_mode`, and `set_main_window_maximized` commands; removed generic `set_window_mode`.
+- `src/lib/windowing.ts`: added adaptive window interfaces and window/floating invoke wrappers.
+- `src/lib/tasks.ts`: retained floating intent authority while removing floating preference/show/hide/toggle wrappers and type.
+- Updated existing consumers to import window-only wrappers from `windowing.ts`.
+
+Task/Pomodoro/reminder authorities, activation ordering, stale-response/token semantics, recurring successors, UI release, tray behavior, and Task 3 adaptive tracking were preserved. Unrelated dirty files were not staged.
+
+## Self-review / concerns
+
+The working tree contains unrelated pre-existing modifications and untracked files; they remain untouched and unstaged. Rust emits only the existing linker informational warning. The only process concern is that the historical RED state could not be independently reproduced after implementation was already present.
+
+## Commit
+
+`4bf797a1aea60087d28b7fdbf8463f8c42d49f40` — `Add explicit immersive window commands`
+
+## Fix Round 1
+
+### Reviewer findings addressed
+
+1. Diagnostics still invoked deleted `set_window_mode` and exposed controls that failed at runtime. The live call site now imports explicit `enterImmersiveMode`, `exitImmersiveMode`, and `setMainWindowMaximized` wrappers. Fullscreen transitions use immersive commands; normal/maximized transitions exit immersive first when needed, then apply the explicit maximize command while preserving busy/error/success and mode callback behavior. No live frontend `set_window_mode` invocation remains.
+2. The diagnostics fix was committed independently. The Rust implementation already present on this branch remains the source of the explicit immersive command behavior and persisted restore state.
+
+### Files changed
+
+- `src/lib/components/DiagnosticsPanel.svelte`: migrated mode controls to explicit windowing APIs and imported `setAlwaysOnTop` from `windowing.ts`.
+
+### Verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` — passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml immersive_restore -- --nocapture` — 2 passed, 0 failed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — 73 passed, 0 failed.
+- `npm run check` — passed with 0 errors and 0 warnings.
+- Frontend search for `set_window_mode` under `src` — no matches.
+
+### Self-review and concerns
+
+Only `src/lib/components/DiagnosticsPanel.svelte` was staged for this fix round; unrelated dirty files remain unstaged. Existing Rust linker informational warnings do not indicate test failures. The Rust implementation and prior Task 4 commit were already present before this fix round, so this round’s independent commit contains only the reviewer-facing diagnostics migration.
+
+### Fix commit
+
+`d7ddea47922d07d5e82b024067497e0b8d64bae0` — `Fix diagnostics immersive window controls`
