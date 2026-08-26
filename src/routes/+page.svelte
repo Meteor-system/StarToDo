@@ -94,6 +94,7 @@
   let pendingStartSessionId: number | null = null;
   let pomodoroSessionEpoch = 0;
   let acceptedPomodoroSessionId: number | null = null;
+  let immersiveIntentEpoch = 0;
   let immersiveEnterFlight: Promise<void> | null = null;
   let immersiveExitFlight: Promise<boolean> | null = null;
   let pomodoroSnapshot = $state<PomodoroSnapshot | null>(null);
@@ -220,14 +221,19 @@
     }
   }
 
-  async function enterImmersiveDisplay(): Promise<void> {
+  async function enterImmersiveDisplay(intentToken?: number): Promise<void> {
     if (immersiveEnterFlight !== null) return immersiveEnterFlight;
+    const token = intentToken ?? ++immersiveIntentEpoch;
 
     const flight = (async () => {
       if (immersiveExitFlight !== null) {
         if (!await immersiveExitFlight) return;
       }
-      if (activeScene !== 'focus' || immersiveDisplay !== 'off') return;
+      if (
+        token !== immersiveIntentEpoch ||
+        activeScene !== 'focus' ||
+        immersiveDisplay !== 'off'
+      ) return;
 
       if (!tauriAvailable) {
         immersiveDisplay = 'visual-fallback';
@@ -250,7 +256,8 @@
     }
   }
 
-  async function exitImmersiveDisplay(): Promise<boolean> {
+  async function exitImmersiveDisplay(advanceIntent = true): Promise<boolean> {
+    if (advanceIntent) immersiveIntentEpoch += 1;
     if (immersiveEnterFlight !== null) await immersiveEnterFlight;
     if (immersiveExitFlight !== null) return immersiveExitFlight;
 
@@ -279,12 +286,18 @@
     input: StartPomodoroInput,
     immerse: boolean
   ): Promise<void> {
+    const enterIntentToken = immerse ? ++immersiveIntentEpoch : null;
     const started = await runPomodoroCommand(
       () => startPomodoro(input),
       input.taskId
     );
 
-    if (started && immerse && activeScene === 'focus') await enterImmersiveDisplay();
+    if (
+      started &&
+      enterIntentToken !== null &&
+      enterIntentToken === immersiveIntentEpoch &&
+      activeScene === 'focus'
+    ) await enterImmersiveDisplay(enterIntentToken);
   }
 
   function requestPomodoroStart(input: StartPomodoroInput): void {
@@ -329,8 +342,11 @@
   }
 
   async function changeScene(scene: AppScene): Promise<void> {
-    if (scene === 'tasks' && (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null)) {
-      if (!await exitImmersiveDisplay()) return;
+    if (scene === 'tasks') {
+      immersiveIntentEpoch += 1;
+      if (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null) {
+        if (!await exitImmersiveDisplay(false)) return;
+      }
     }
     activeScene = scene;
   }
@@ -883,7 +899,7 @@
       warning={pomodoroWarning}
       immersive={immersiveDisplay !== 'off'}
       onReturnToTasks={() => changeScene('tasks')}
-      onEnterImmersive={enterImmersiveDisplay}
+      onEnterImmersive={() => { void enterImmersiveDisplay(); }}
       onExitImmersive={() => { void exitImmersiveDisplay(); }}
       onStart={requestPomodoroStart}
       onPause={() => { void runPomodoroCommand(pausePomodoro); }}
