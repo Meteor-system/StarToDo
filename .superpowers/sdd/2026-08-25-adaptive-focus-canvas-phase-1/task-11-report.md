@@ -228,6 +228,7 @@ Follow-up GREEN:
 - `nextFloatingResetRequest` returns reset only after size `inFlight` clears, while `nextFloatingSizeRequest` remains blocked by reset pending/in-flight; the production drain uses both selectors and never starts reset concurrently with an older set.
 - Reset failure retains its reset token for one best-effort preferences read. Reset reconciliation accepts only that globally current reset token, observes authoritative `userResized`/dimensions without advancing presentation `appliedGeneration`, then clears reset intent. A failed reconciliation clears the intent without looping.
 - Current reset success rebases desired to the returned `displayMode` at reset generation, keeping desired/applied state coherent.
+- Later audit clarification: HEAD already gates set reconciliation on both global and desired generation and includes fail → reset intent → delayed old reconciliation coverage. Added characterization for two reset intents: an obsolete first-reset failure preserves the newer pending reset and clears only its matching in-flight token; size coordinator 14/14 passed without production changes.
 
 Focused round-2 aggregate GREEN:
 

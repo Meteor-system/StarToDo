@@ -156,6 +156,21 @@ describe('floating size sync coordination', () => {
     expect(sync.preferences).toEqual(prefs('capsule', 340, true));
   });
 
+  it('keeps a newer reset pending when an obsolete reset fails', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('expanded', 380, true));
+    sync = requestFloatingReset(sync);
+    const firstReset = nextFloatingResetRequest(sync)!;
+    sync = beginFloatingResetRequest(sync, firstReset);
+    sync = requestFloatingReset(sync);
+    const newerReset = sync.resetDesired!;
+
+    sync = acceptFloatingResetFailure(sync, firstReset);
+
+    expect(sync.resetDesired).toEqual(newerReset);
+    expect(sync.resetInFlight).toBeNull();
+    expect(nextFloatingResetRequest(sync)).toEqual(newerReset);
+  });
+
   it('accepts reset failure reconciliation without satisfying reset presentation', () => {
     let sync = acceptFloatingPreferencesRead(state(), prefs('expanded', 380, true));
     sync = requestFloatingReset(sync);
