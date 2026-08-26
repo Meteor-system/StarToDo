@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import ContextDrawer from '$lib/components/ContextDrawer.svelte';
+  import { ownsTaskDetailsOperation } from '$lib/task-interaction';
   import {
     epochMsToLocalDateTime,
     localDateTimeToEpochMs,
@@ -55,7 +56,10 @@
   let projectId = $state<number | null>(null);
   let titleInput = $state<HTMLInputElement>();
   let deleteButton = $state<HTMLButtonElement>();
-  let draftTaskId: number | null = null;
+  let draftTaskId = $state<number | null>(null);
+  let draftGeneration = $state(0);
+  let operationSequence = 0;
+  let activeOperationId = $state(0);
 
   let assignableProjects = $derived(
     projects.filter((project) => project.archivedAtUnixMs === null || project.id === task?.projectId)
@@ -75,6 +79,9 @@
     if (draftTaskId === task.id) return;
     resetDraft(task);
     draftTaskId = task.id;
+    draftGeneration += 1;
+    activeOperationId = 0;
+    busy = false;
     void tick().then(() => titleInput?.focus());
   });
 
@@ -113,6 +120,25 @@
     }
   }
 
+  function beginPresentationOperation(taskId: number): { taskId: number; draftGeneration: number; operationId: number } {
+    const operationId = ++operationSequence;
+    activeOperationId = operationId;
+    busy = true;
+    requestError = null;
+    return { taskId, draftGeneration, operationId };
+  }
+
+  function ownsPresentationOperation(context: { taskId: number; draftGeneration: number; operationId: number }): boolean {
+    return ownsTaskDetailsOperation(
+      draftTaskId,
+      draftGeneration,
+      activeOperationId,
+      context.taskId,
+      context.draftGeneration,
+      context.operationId
+    );
+  }
+
   async function cancelDelete(): Promise<void> {
     confirmingDelete = false;
     await tick();
@@ -142,29 +168,40 @@
     requestError = null;
     if (Object.keys(errors).length) return;
 
-    busy = true;
+    const operation = beginPresentationOperation(currentTask.id);
     try {
       const changed = await onUpdate(currentTask.id, input);
-      if (await onChanged(changed.task, 'update', changed)) onClose();
+      const accepted = await onChanged(changed.task, 'update', changed);
+      if (accepted && ownsPresentationOperation(operation)) onClose();
     } catch (cause) {
-      requestError = cause instanceof Error ? cause.message : String(cause);
+      if (ownsPresentationOperation(operation)) {
+        requestError = cause instanceof Error ? cause.message : String(cause);
+      }
     } finally {
-      busy = false;
+      if (ownsPresentationOperation(operation)) {
+        busy = false;
+        activeOperationId = 0;
+      }
     }
   }
 
   async function remove(): Promise<void> {
     const currentTask = task;
     if (!currentTask || busy) return;
-    busy = true;
-    requestError = null;
+    const operation = beginPresentationOperation(currentTask.id);
     try {
       const result = await onDelete(currentTask.id);
-      if (await onRemoved(currentTask.id, result)) onClose();
+      const accepted = await onRemoved(currentTask.id, result);
+      if (accepted && ownsPresentationOperation(operation)) onClose();
     } catch (cause) {
-      requestError = cause instanceof Error ? cause.message : String(cause);
+      if (ownsPresentationOperation(operation)) {
+        requestError = cause instanceof Error ? cause.message : String(cause);
+      }
     } finally {
-      busy = false;
+      if (ownsPresentationOperation(operation)) {
+        busy = false;
+        activeOperationId = 0;
+      }
     }
   }
 </script>

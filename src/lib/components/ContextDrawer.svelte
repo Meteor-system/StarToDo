@@ -33,6 +33,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       onClose();
@@ -58,7 +59,7 @@
 </script>
 
 {#if open}
-  <div class="drawer-backdrop" role="presentation" onclick={(event) => { if (event.currentTarget === event.target) onClose(); }} onkeydown={(event) => { if (event.key === 'Escape') onClose(); }}>
+  <div class="drawer-backdrop" role="presentation" onclick={(event) => { if (event.currentTarget === event.target) onClose(); }} onkeydown={(event) => { if (!event.defaultPrevented && event.key === 'Escape') onClose(); }}>
     <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
     <aside bind:this={panel} id={drawerId} class:wide={size === 'wide'} class="context-drawer" role="dialog" aria-modal="true" aria-labelledby={`${drawerId}-title`} tabindex="-1" onkeydown={handleKeydown}>
       <header>

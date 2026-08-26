@@ -666,6 +666,7 @@
     void onReminderReconcile().catch(() => undefined);
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
+    if (selectedTaskId !== null && selectedTaskId !== task.id) return true;
     if (kind === 'complete') {
       const focusId = adjacentTaskId ?? result.nextTask?.id;
       const action = focusId === undefined ? null : document.getElementById(`task-action-${focusId}`);
@@ -690,6 +691,7 @@
     announcement = '已移入回收站，可在回收站中恢复。';
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
+    if (selectedTaskId !== null && selectedTaskId !== id) return true;
     if (focusId !== undefined) {
       document.getElementById(`task-action-${focusId}`)?.focus();
     } else {

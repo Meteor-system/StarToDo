@@ -42,7 +42,21 @@ All three were corrected before final verification. The reviewer also noted dead
 
 Controller pre-review then identified two accessibility/event-scope corrections: the focusable article must remain a non-button row because it contains interactive descendants, and Ctrl/Cmd+Enter must be scoped to the details form rather than the window. The interactive role and row-level completion label were removed, the brief-aligned `article tabindex="0"` contract was restored with narrow Svelte diagnostics ignores, and the save key handler was moved onto the form. The copied archived-project note was also corrected to require `taskProject !== null` before checking its archive timestamp.
 
-Deferred Minors: none.
+### Independent review fix round 1/5
+
+Two Important defects were addressed in a new follow-up commit:
+
+- Nested confirmation Escape propagation: `ContextDrawer` now ignores events already handled with `preventDefault()`, including both panel and backdrop Escape handling. ConfirmDialog Escape therefore cancels only the confirmation and preserves the details drawer draft; unhandled Escape still closes the drawer once. The measured Chromium probe showed the nested fixed confirmation covers the full viewport and receives hit testing, so no z-index change was made and the pre-existing dirty `ConfirmDialog.svelte` was not staged.
+- Details operation presentation ownership: save/delete capture task id, monotonically increasing draft generation, and a unique operation id. Token-aware `onChanged`/`onRemoved` still run so accepted data applies, while drawer close, command error, and busy clearing occur only when the originating operation still owns the current presentation. Switching tasks or reopening the same task creates a new draft generation whose state cannot be overwritten by the old operation. `TaskScene` also avoids moving focus behind a different selected task drawer after accepted changes/removals.
+
+TDD evidence for the ownership helper:
+
+- RED: `npm run test:unit -- src/lib/task-interaction.test.ts` — 3 ownership cases failed with `TypeError: ownsTaskDetailsOperation is not a function`; the original 4 keyboard cases passed.
+- GREEN: the same focused command — 1 file passed, 7/7 tests passed after adding the minimal pure helper.
+
+Deferred Minor: component-boundary E2E coverage for normal row Space, trash-row Space, and nested-button keyboard behavior is deferred to Task 12's keyboard matrix; no static substitute weakens that requirement.
+
+Deferred Minors: the Task 12 keyboard-matrix coverage above.
 
 ## Verification
 
@@ -55,6 +69,10 @@ Deferred Minors: none.
 - Self-review covered every brief step and the operation-token, recurring-successor, adjacent-focus, local-scroll, Pomodoro-authority, and reduced-motion invariants.
 
 ## Rulings
+
+Ruling: Keep nested ConfirmDialog z-index unchanged based on measured browser stacking evidence — the fixed confirmation covered the full Chromium viewport and received center hit testing inside the drawer stacking context — cost if wrong: Windows WebView could render it differently, so Task 12 Windows smoke must verify confirmation visibility/Escape.
+
+Ruling: Gate presentation close/error/busy by task id + draft generation — each operation also carries a unique operation id so a later operation in the same draft owns presentation state — cost if wrong: a legitimate old operation may apply data without dismissing the current drawer, requiring explicit user close.
 
 Ruling: Keep the required `TaskCanvas` callback/operation surface even when `TaskItem` no longer consumes update/delete callbacks — the details drawer and scene still require the Task 6 integration boundary — cost if wrong: a future cleanup may move more callbacks out of `TaskCanvas`.
 
