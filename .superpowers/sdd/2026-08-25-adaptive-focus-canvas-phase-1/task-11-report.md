@@ -204,6 +204,7 @@ GREEN:
 
 - 1/1 passed with real DOM behavior. The test disables every mapped expanded target before post-tick restoration, leaving no focus owner.
 - Production now tries the logical target, then a predictable first enabled marked fallback. After clearing transient focusout suppression it verifies `document.activeElement` is inside the region; if not, it dispatches real `focus-out`, arming bounded collapse.
+- Test-quality follow-up replaces section-only `not.toBeFocused()` with the stronger executable assertion `!region.contains(document.activeElement)`, proving no descendant owns focus before time advances.
 
 ### Ownership-free activation deadline
 
@@ -212,6 +213,7 @@ Executable browser coverage retains the real touchscreen tap and adds a standard
 - Initial fake-clock attempts exposed test-timing artifacts: retrying assertions and `setFixedTime` do not provide a reliable relative timer base. Those runs are not production REDs.
 - With `clock.pauseAt` immediately before activation, the deterministic test is stable: immediate interaction-expanded, still interaction-expanded at 4,999 ms, capsule exactly at 5,000 ms.
 - Stability check: 3/3 repeated runs passed.
+- Test-quality follow-up moves the real touchscreen case into a touch-configured `test.describe` using the standard fixture page, so the file-wide pageerror/console-error beforeEach/afterEach hooks observe and assert the actual touch page. The timed ownership-free branch already uses the fixture page.
 
 Controller reset acceptance follow-up RED:
 

@@ -204,27 +204,26 @@ test('failed logical focus restoration arms bounded collapse', async ({ page }) 
   await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
   await page.getByRole('button', { name: '暂停' }).focus();
   await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
-  await expect(floating).not.toBeFocused();
+  expect(await floating.evaluate((region) => !region.contains(document.activeElement))).toBe(true);
   await page.clock.fastForward(5_000);
   await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
 });
 
-test('active capsule explicit activation expands without focus ownership', async ({
-  browser
-}) => {
-  const context = await browser.newContext({ hasTouch: true, viewport: { width: 340, height: 64 } });
-  const page = await context.newPage();
-  await installActiveFloatingTauriMock(page);
-  await page.goto('/?window=floating');
+test.describe('touch activation', () => {
+  test.use({ hasTouch: true, viewport: { width: 340, height: 64 } });
 
-  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
-  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
-  const expand = page.getByRole('button', { name: '展开悬浮窗' });
-  const box = await expand.boundingBox();
-  expect(box).not.toBeNull();
-  await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
-  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
-  await context.close();
+  test('active capsule explicit activation expands without focus ownership', async ({ page }) => {
+    await installActiveFloatingTauriMock(page);
+    await page.goto('/?window=floating');
+
+    const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+    await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+    const expand = page.getByRole('button', { name: '展开悬浮窗' });
+    const box = await expand.boundingBox();
+    expect(box).not.toBeNull();
+    await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  });
 });
 
 test('ownership-free activation collapses exactly at its deadline', async ({ page }) => {
