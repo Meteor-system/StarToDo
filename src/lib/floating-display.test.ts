@@ -22,6 +22,40 @@ describe('floating display reducer', () => {
     expect(active.mode).toBe('capsule');
   });
 
+  it('explicit activation expands without inventing pointer or focus ownership', () => {
+    let state = createFloatingDisplayState(true, false);
+    state = reduceFloatingDisplay(state, { type: 'activate', at: 100 });
+
+    expect(state.mode).toBe('interaction-expanded');
+    expect(state.pointerInside).toBe(false);
+    expect(state.focusInside).toBe(false);
+    expect(state.lastInteractionAt).toBe(100);
+    expect(state.collapseAt).toBe(100 + FLOATING_INTERACTION_MS);
+
+    state = reduceFloatingDisplay(state, {
+      type: 'timeout',
+      at: 100 + FLOATING_INTERACTION_MS - 1
+    });
+    expect(state.mode).toBe('interaction-expanded');
+
+    state = reduceFloatingDisplay(state, {
+      type: 'timeout',
+      at: 100 + FLOATING_INTERACTION_MS
+    });
+    expect(state.mode).toBe('capsule');
+  });
+
+  it('keeps truthful ownership when activation follows pointer expansion', () => {
+    let state = createFloatingDisplayState(true, false);
+    state = reduceFloatingDisplay(state, { type: 'pointer-enter', at: 100 });
+    state = reduceFloatingDisplay(state, { type: 'activate', at: 150 });
+    state = reduceFloatingDisplay(state, { type: 'pointer-leave', at: 200 });
+
+    expect(state.pointerInside).toBe(false);
+    expect(state.focusInside).toBe(false);
+    expect(state.collapseAt).toBe(150 + FLOATING_INTERACTION_MS);
+  });
+
   it('keeps interaction expansion for five seconds', () => {
     let state = createFloatingDisplayState(true, false);
     state = reduceFloatingDisplay(state, { type: 'pointer-enter', at: 100 });

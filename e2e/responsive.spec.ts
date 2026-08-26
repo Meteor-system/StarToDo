@@ -93,6 +93,108 @@ async function expectDocumentInsideViewport(page: Page): Promise<PlannerMeasurem
   return measurements;
 }
 
+async function installActiveFloatingTauriMock(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (payload: unknown) => void>();
+    let callbackId = 0;
+    const preferences = {
+      visible: true,
+      x: null,
+      y: null,
+      width: 340,
+      height: 64,
+      alwaysOnTop: true,
+      userResized: false,
+      displayMode: 'capsule'
+    };
+    const snapshot = {
+      settings: {
+        focusMinutes: 25,
+        shortBreakMinutes: 5,
+        longBreakMinutes: 15,
+        longBreakInterval: 4,
+        updatedAtUnixMs: Date.now()
+      },
+      currentSession: {
+        id: 1,
+        taskId: null,
+        taskTitleSnapshot: '测试专注任务',
+        phase: 'focus',
+        status: 'running',
+        plannedDurationSeconds: 1500,
+        pausedRemainingSeconds: null,
+        startedAtUnixMs: Date.now(),
+        targetEndsAtUnixMs: Date.now() + 1_500_000,
+        pausedAtUnixMs: null,
+        endedAtUnixMs: null,
+        notificationTag: null,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now()
+      },
+      completedFocusesInCycle: 0,
+      recommendedPhase: 'focus',
+      completedFocusTodayCount: 0
+    };
+
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        transformCallback(callback: (payload: unknown) => void) {
+          const id = ++callbackId;
+          callbacks.set(id, callback);
+          return id;
+        },
+        unregisterCallback(id: number) {
+          callbacks.delete(id);
+        },
+        async invoke(command: string, args: Record<string, unknown> = {}) {
+          if (command === 'get_pomodoro_view') return { snapshot, taskSummaries: [] };
+          if (command === 'list_tasks' || command === 'list_projects' || command === 'list_reminders') return [];
+          if (command === 'get_floating_window_preferences') return preferences;
+          if (command === 'set_floating_display_mode') {
+            preferences.displayMode = args.mode as 'capsule' | 'expanded';
+            return { ...preferences };
+          }
+          if (command === 'plugin:event|listen') return 1;
+          if (command === 'plugin:event|unlisten') return null;
+          if (command === 'open_focus_from_floating' || command === 'hide_floating_window') return null;
+          throw new Error(`Unexpected mocked Tauri command: ${command}`);
+        }
+      }
+    });
+  });
+}
+
+test('active capsule preserves logical focus while expanding', async ({ page }) => {
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+
+  await page.keyboard.press('Tab');
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  await expect(page.getByRole('button', { name: '打开专注工作区' })).toBeFocused();
+
+  await page.reload();
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  const expand = page.getByRole('button', { name: '展开悬浮窗' });
+  await expand.focus();
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+  await expect(page.getByRole('button', { name: '隐藏悬浮窗' })).toBeFocused();
+});
+
+test('active capsule explicit activation expands without focus ownership', async ({ page }) => {
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 340, height: 64 });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', { name: 'StarToDo 悬浮窗' });
+  await expect(floating).toHaveAttribute('data-display-mode', 'capsule');
+  await page.getByRole('button', { name: '展开悬浮窗' }).dispatchEvent('click');
+  await expect(floating).toHaveAttribute('data-display-mode', 'interaction-expanded');
+});
+
 test('floating route renders an expanded idle companion', async ({
   page
 }) => {

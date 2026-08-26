@@ -20,7 +20,7 @@ export type FloatingDisplayEvent =
   | { type: 'snapshot'; focusActive: boolean; at: number }
   | { type: 'always-expanded'; value: boolean; at: number }
   | {
-      type: 'pointer-enter' | 'pointer-leave' | 'focus-in' | 'focus-out' | 'timeout';
+      type: 'activate' | 'pointer-enter' | 'pointer-leave' | 'focus-in' | 'focus-out' | 'timeout';
       at: number;
     };
 
@@ -83,6 +83,21 @@ export function reduceFloatingDisplay(
     return {
       ...next,
       mode: next.pointerInside || next.focusInside ? 'interaction-expanded' : 'capsule'
+    };
+  }
+
+  if (event.type === 'activate') {
+    if (state.alwaysExpanded || !state.focusActive) {
+      return { ...state, mode: 'expanded', lastInteractionAt: event.at, collapseAt: null };
+    }
+    return {
+      ...state,
+      mode: 'interaction-expanded',
+      lastInteractionAt: event.at,
+      collapseAt:
+        state.pointerInside || state.focusInside
+          ? null
+          : event.at + FLOATING_INTERACTION_MS
     };
   }
 

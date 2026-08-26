@@ -1,142 +1,188 @@
 # Task 11 report
 
-## Outcome
+## Outcome and review status
 
-Implemented the adaptive floating focus companion on frozen base `295785b379614296dd9a26606ac2afba59cbf8e6` in the prescribed isolated worktree. Added separate capsule and expanded visual components, connected the existing reducer, preserved backend authority, strengthened stale-response protection, and added the prescribed responsive E2E.
+Task 11 implements the adaptive floating capsule and expanded companion on frozen base `295785b379614296dd9a26606ac2afba59cbf8e6`.
 
-Changed paths:
+The controller review-visible base is `7ac46eab029e2d2a947ace255d6af3281fd11c2c`. Controller review result at that point: **FAIL**. The explicit root role was subsequently fixed in `56b4cc1e106fc8b9a47be196e60698ee24c0f188`. Fix round 1/5 addresses the remaining Important findings: explicit activation, first keyboard focus preservation, Pomodoro acceptance/warnings, generation-aware size reconciliation, and defined failed-intent retry.
+
+Changed/authorized Task 11 paths in the final implementation:
 
 - `src/lib/components/FloatingCapsule.svelte`
 - `src/lib/components/FloatingExpandedPanel.svelte`
 - `src/lib/components/FloatingWindow.svelte`
+- `src/lib/floating-display.ts`
+- `src/lib/floating-display.test.ts`
+- `src/lib/floating-coordinator.ts`
+- `src/lib/floating-coordinator.test.ts`
+- `src/lib/floating-size-sync.ts`
+- `src/lib/floating-size-sync.test.ts`
 - `e2e/responsive.spec.ts`
 - `.superpowers/sdd/2026-08-25-adaptive-focus-canvas-phase-1/task-11-report.md`
 
-`src/lib/tasks.ts` and `src/routes/+page.svelte` were proven already migrated and were deliberately left unchanged. Preference/show/hide/size imports remain owned by `windowing.ts`; floating task/focus intents remain owned by `tasks.ts`.
+`src/lib/tasks.ts` and `src/routes/+page.svelte` were already correctly migrated and remain unchanged. Unrelated global dirt and generated artifacts were preserved.
 
-## Baseline evidence
+## Frozen baseline
 
-Owned-path-only status was clean before the first edit. Fingerprints matched `task-11-base.txt` exactly:
+Before the first Task 11 edit, owned tracked files matched `task-11-base.txt` exactly:
 
 - `FloatingWindow.svelte`: 15028 bytes, SHA-256 `6680C7AB98669F854E711EB6C063EEB3512F8E1C9F382312FD655C8A30F59F86`
 - `tasks.ts`: 17366 bytes, SHA-256 `E6E54086EB3050759057B85EB7526033D85950E7170EA5B72918330EB8258FA1`
 - `+page.svelte`: 37430 bytes, SHA-256 `FC7521E0EA32DD2757D87F0A70D34D5A159982B176A175A691D90A24B36F8957`
 - `responsive.spec.ts`: 9328 bytes, SHA-256 `4B7C42980451DBAFA8B6802961329E43631D297003411DE0FC794F1948A60949`
-- Both component create paths and this report path were absent.
+- Both visual component create paths and this report were absent.
 
-Unrelated global dirt was preserved and never staged or modified.
+## Original TDD evidence
 
-## TDD evidence
-
-The prescribed command did not forward grep:
+The prescribed npm E2E command did not forward grep:
 
 - `npm run test:e2e -- --grep "expanded idle companion"`
-- Actual script invocation: `playwright test expanded idle companion`
-- Result: exit 1, `Error: No tests found.`
+- Actual invocation: `playwright test expanded idle companion`
+- Result: exit 1, `No tests found`.
 
-Direct genuine RED before production code:
-
-- `npx playwright test --grep "expanded idle companion"`
-- 1 test run, 1 failed.
-- Expected `data-display-mode="expanded"`; received no attribute (`null`) on the existing region.
-
-Direct GREEN after production code:
+Direct genuine original RED:
 
 - `npx playwright test --grep "expanded idle companion"`
-- 1 passed.
-- Final fresh focused run: 1 passed in 7.7s.
+- 1 test, 1 failed: expected `data-display-mode="expanded"`, received no attribute.
 
-## Verification
+Direct original GREEN:
 
-- `npm run test:unit -- src/lib/floating-display.test.ts`: 1 file, 9/9 tests passed. This npm script forwarded the file argument correctly.
-- Direct `npx vitest run src/lib/floating-display.test.ts`: 1 file, 9/9 passed.
-- `npm run check`: 0 errors, 0 warnings.
-- Final `npm run test:unit`: 7 files, 62/62 passed.
-- Focused `npx playwright test --grep "expanded idle companion"`: 1/1 passed.
-- `npx playwright test e2e/responsive.spec.ts`: 8/8 passed.
-- Final full `npx playwright test`: 20/20 passed.
-- `git diff --check` on owned outputs: exit 0; only Git line-ending notices, no whitespace errors.
-- All changed source/E2E files were validated as nonempty strict UTF-8.
-- Playwright browser-error hooks remained empty for the responsive case and full suite.
+- Same direct Playwright grep: 1/1 passed.
 
-## Responsive measurements
+## Fix round 1/5 RED and GREEN evidence
+
+### Explicit click/activation
+
+RED before reducer production edit:
+
+- `npx vitest run src/lib/floating-display.test.ts`
+- 12 tests: 2 failed, 10 passed.
+- Failures: explicit `activate` left active state in `capsule`; activation following pointer expansion retained the old interaction deadline.
+
+GREEN:
+
+- Focused reducer file: 12/12 passed.
+- `activate` enters `interaction-expanded`, preserves truthful pointer/focus flags, sets `collapseAt = at + 5000`, and deterministic timeout returns to capsule.
+
+### Real active-capsule keyboard focus and activation
+
+A minimal test-only Tauri IPC/event mock is installed with Playwright `addInitScript`; no production test hook exists.
+
+RED progression:
+
+- Initial active-capsule run: 2/2 failed because child initialization observed the parent `tauriAvailable=false` mount value and never retried when it became true. This exposed a real runtime initialization ordering defect.
+- After runtime initialization became prop-reactive, 2/2 still failed at intended behavior: reverse/expand focus remained capsule and explicit click activation remained capsule.
+
+GREEN:
+
+- `npx playwright test --grep "active capsule"`: 2/2 passed.
+- Forward Tab preserves open-focus across capsule subtree replacement.
+- Direct focus of the reverse-tab destination preserves the logical expand target as the stable expanded hide control.
+- Explicit expand-button click enters interaction-expanded without synthetic pointer/focus ownership.
+- Transient destroyed-node focusout is ignored only while restoration is pending; restored focusin does not loop.
+
+### Pomodoro ordering and warnings
+
+RED:
+
+- `npx vitest run src/lib/floating-coordinator.test.ts`
+- Suite failed to import because `floating-coordinator` did not exist.
+
+GREEN:
+
+- 3/3 coordinator tests passed.
+- A single monotonic epoch covers reads and mutations: the newer start wins.
+- Command results are accepted only while their token is current, then a fresh authority read starts.
+- Read/listener warnings, mutation failures, and notification warnings are separate; a successful read cannot erase a notification warning.
+- `pomodoroBusy` still prevents local mutation concurrency; no browser-derived snapshot is accepted.
+
+### Native-size failure, ABA, and retry
+
+RED:
+
+- `npx vitest run src/lib/floating-size-sync.test.ts`
+- Suite failed to import because `floating-size-sync` did not exist.
+
+GREEN:
+
+- 7/7 size coordinator tests passed.
+- Covers initial preference-read gate, gate failure drain, failure with no spin, explicit later same-mode retry, superseded failure, ambiguous-failure reconciliation, ABA response rejection, and latest-generation preference acceptance.
+
+ABA timeline:
+
+1. Generation 1 requests expanded.
+2. While generation 1 is in flight, generation 2 requests capsule.
+3. Generation 3 requests expanded again; backend/user-resize state may now have changed dimensions or `userResized`.
+4. Generation-1 expanded response is obsolete even though its mode string equals generation 3. It must not update local preferences or satisfy generation 3.
+5. Generation 3 remains pending and must receive its own response before preferences (including width/height/userResized) are accepted.
+
+Ambiguous set/reset failures reconcile with `getFloatingWindowPreferences()`. Reconciliation is accepted only for the same current generation; it updates observed preferences but does not mark a failed command applied. The failed desired intent is retained without immediate retry. A later explicit pointer/focus/click/state event clears that one failure and retries once; a persistent failure does not spin.
+
+## Final behavior audit
+
+- Root is an explicit `<section role="region" aria-label="StarToDo 悬浮窗" data-display-mode={display.mode}>`.
+- Capsule implements the exact Props interface and renders one decorative star, phase, tabular timer, ellipsized task, pause/resume primary, exact open-focus and expand labels, and no list/settings/diagnostics.
+- Expanded implements the exact Props interface and renders current phase/status/timer/task, first five already-visible-filtered tasks, project and overdue/today/time labels, task/focus actions, always-expanded, conditional reset, hide, and local body scrolling.
+- Browser/Tauri guards agree. Runtime initialization retries once when the parent prop becomes true; browser preview still invokes no Tauri command.
+- Task and Pomodoro refresh acceptance is monotonic and disposed-safe. Pomodoro mutation snapshots cannot overwrite a newer-started read.
+- Size sync is preference-read gated, single-flight, latest-generation aware, and reconciliation-safe. Manual resize preferences remain backend authority.
+- One reducer collapse timer exists; timeout dispatches only timeout. Explicit activation uses reducer state, not synthetic ownership.
+- Keyboard target restoration maps open-focus to open-focus, primary to primary, and capsule expand/reverse destination to the stable expanded hide control.
+- Entry motion is 180ms, capsule/collapse motion 240ms, opacity/transform only, and reduced motion switches directly.
+- Orange marks current/primary actions; danger is limited to overdue/warnings.
+- File-wide responsive E2E hooks install exactly one pageerror and one console-error listener and assert the collected list after every test.
+
+## Responsive evidence
 
 At 360x260 browser preview:
 
-- viewport: 360x260
-- document: 360x260
-- local content body: clientHeight 136, scrollHeight 136, computed overflow-y `auto`
-- `data-display-mode`: `expanded`
-- `打开专注工作区` visible
-- document horizontal and vertical containment passed
-- no Tauri invoke warning or browser error
+- viewport 360x260
+- document 360x260
+- local content body clientHeight 136, scrollHeight 136, `overflow-y:auto`
+- expanded mode and open-focus button visible
+- document contained on both axes
+- browser error collection empty
 
-Capsule static fit at 340x64:
+At active capsule 340x64 with mocked Tauri:
 
-- Exactly four resident groups: one decorative star marker, one combined phase/timer/ellipsized-task focus control, one pause/resume primary control, and one expand control.
-- Grid is `auto minmax(0, 1fr) auto auto`; all children use `min-width: 0`; task text ellipsizes; total vertical sizing is bounded by the 64px host.
-- No task list, settings, warnings, or diagnostics are rendered by the capsule component.
-
-## Static audit
-
-- Exact Props interfaces implemented for both new components.
-- Expanded panel receives already-visible-filtered tasks and renders `slice(0, 5)` with project and overdue/today/time labels.
-- Only `.content-body` owns local scrolling; the root/document is locked and every changed html/body inline style is restored exactly on destroy.
-- Reset auto size is rendered only for backend `userResized`; always-expanded is persisted only through `writeFloatingExpansionPreference` and the reducer event.
-- Root has exact section/region semantics through the named `<section>`, `data-display-mode`, pointer events, focus events, and related-target containment.
-- One collapse timer exists; it is cleared before replacement and on destroy; timeout dispatches only `{ type: 'timeout', at: Date.now() }`.
-- Keyboard focus does not manufacture pointer-inside state. Mode replacement restores the logical primary focus target after `tick()` when focus was inside.
-- Tasks and Pomodoro refreshes use independent monotonic sequences plus disposed checks. A Pomodoro mutation increments the refresh sequence before awaiting the command, accepts only the mutation snapshot, then refreshes backend authority.
-- Browser preview invokes no Tauri commands because the runtime guard requires both `tauriAvailable` and an actual Tauri global.
-- Desktop size requests are microtask-coalesced before launch and then single-flight with one latest pending target. Successful current responses update preferences; superseded responses cannot overwrite them. Failures warn, do not mutate Pomodoro state, do not spin retry, and later explicit transitions can retry.
-- Manual `userResized` remains backend authority; reset uses only the backend command and accepted response.
-- Entry motion is 180ms, capsule/collapse motion 240ms, opacity/transform only, with direct reduced-motion switching. Outer dimensions are never animated in CSS.
-- Orange is restricted to current/primary emphasis; danger is used only for overdue and warning content.
-
-## Independent review
-
-Independent review found no Critical issues. Three Important issues were fixed before final verification:
-
-1. Permanent suppression of a transiently failed size mode was removed; later explicit requests may retry without spin retry.
-2. Focused capsule DOM replacement now restores the corresponding logical primary focus target after rendering.
-3. Size requests now coalesce in a microtask before the serialized latest-pending drain starts.
+- capsule mode reached from a real running Pomodoro snapshot
+- keyboard focus restoration and explicit activation pass
+- required capsule resident controls remain present without document-level overflow in the focused responsive suite
 
 ## Rulings
 
-- `Ruling: leave tasks.ts and +page.svelte unchanged — their binding import/API migrations already match authority — cost if wrong: unnecessary churn or ownership regression.`
+- `Ruling: leave tasks.ts and +page.svelte unchanged — their binding import/API migrations already match authority and FloatingWindow can react to the prop transition itself — cost if wrong: unnecessary coordinator churn or runtime initialization remains one-shot.`
 - `Ruling: require tauriAvailable and an actual Tauri runtime global — browser preview must never invoke native commands — cost if wrong: E2E console errors and misleading warnings.`
-- `Ruling: accept running and paused sessions as focus-active — both are live sessions for display breathing — cost if wrong: paused sessions expand as idle and violate reducer behavior.`
-- `Ruling: sequence refresh starts, not completions — only the newest task/Pomodoro request may update state — cost if wrong: older polls overwrite listener or mutation results.`
-- `Ruling: invalidate Pomodoro refreshes before mutation and refresh again after accepting mutation — Rust/SQLite stays authoritative — cost if wrong: stale poll rollback or browser-invented state.`
-- `Ruling: microtask-coalesce then serialize native size requests — rapid same-turn transitions collapse to the latest target while in-flight commands remain ordered — cost if wrong: obsolete resize flicker or stale response wins.`
-- `Ruling: do not permanently blacklist failed size modes — persistent failures must not spin, but later user/state transitions may retry — cost if wrong: transient failure disables sizing for the rest of the mount.`
-- `Ruling: restore the logical primary focus target after a focused mode swap — reducer-driven DOM replacement must not strand keyboard users — cost if wrong: focus loss and premature collapse.`
-- `Ruling: let root pointer/focus events drive capsule expansion and only reaffirm focus-in when the root actually matches :focus-within — reducer state must follow DOM truth without synthetic pointer state — cost if wrong: expansion can become stranded or collapse while keyboard focus is active.`
-- `Ruling: keep warning overlay outside both pure visual component interfaces — exact Props remain binding and warnings stay coordinator-owned — cost if wrong: component API drift or business concerns leak into visuals.`
+- `Ruling: retry FloatingWindow runtime initialization when tauriAvailable becomes true, guarded by runtimeInitialized — child onMount can precede the parent prop update — cost if wrong: desktop floating data and listeners never initialize or initialize twice.`
+- `Ruling: model explicit click/touch activation as reducer activate — user activation must expand without inventing pointerInside or focusInside — cost if wrong: clicks are platform-dependent or expansion becomes stranded.`
+- `Ruling: set activation collapseAt deterministically when no real pointer/focus owner exists — an ownership-free interaction still needs one bounded expanded interval — cost if wrong: immediate collapse or permanent expansion.`
+- `Ruling: capture the initiating capsule control before reducer focus-in and restore its matching expanded target after tick — subtree replacement must preserve keyboard intent — cost if wrong: focus falls to body or jumps to an unrelated action.`
+- `Ruling: ignore focusout only while one target-aware restoration token is pending — destroyed capsule nodes emit transient departure before expanded focus can land — cost if wrong: false collapse races restoration or genuine focus departure is swallowed.`
+- `Ruling: use one Pomodoro acceptance epoch for reads and commands — whichever operation starts later owns acceptance — cost if wrong: an older command or poll overwrites newer backend authority.`
+- `Ruling: keep notificationWarning separate from read/listener and mutation warnings — notification delivery failure remains relevant after a successful state refresh — cost if wrong: user loses the warning even though timer state is correct.`
+- `Ruling: increment native-size semantic generation on every desired transition, including ABA — equal mode strings do not imply equal preference snapshots or userResized state — cost if wrong: first-expanded response incorrectly satisfies later-expanded intent.`
+- `Ruling: reconcile preferences after ambiguous set/reset failure without marking the failed intent applied — backend may persist displayMode before set_size returns Err — cost if wrong: local dimensions/userResized stay stale or retry is suppressed.`
+- `Ruling: preserve failed desired intent without immediate spin and clear it only on a later explicit interaction/state event — failures are retryable but persistent faults must remain bounded — cost if wrong: permanent suppression or command loop.`
+- `Ruling: accept native preferences only for the latest semantic generation — obsolete success or reconciliation cannot overwrite newer desired state — cost if wrong: stale width, height, displayMode, or userResized wins.`
+- `Ruling: use file-wide beforeEach/afterEach browser-error hooks — one listener set covers every responsive test consistently — cost if wrong: duplicate listeners add noise or failures escape attribution.`
 
-## Minors
+## Remaining Minors
 
-- The browser preview has no task-fixture injection, so the E2E proves the local body scroll contract (`overflow-y:auto`) but cannot create six visible tasks to prove actual `scrollHeight > clientHeight`, five residents, and the remainder label. Those behaviors are statically explicit in `slice(0, 5)` and the conditional remainder.
-- The active 340x64 capsule cannot be reached in browser-only E2E because browser preview has no backend Pomodoro snapshot injection. Its exact resident set and fit constraints were audited statically; a Windows/Tauri smoke test should exercise the live active-session capsule.
+- Browser preview still has no task fixture with six visible tasks, so actual expanded-list overflow and the remainder label are covered structurally (`slice(0, 5)`, conditional remainder, local `overflow:auto`) rather than by a populated E2E.
+- Windows/Tauri smoke should still validate native window resizing, manual user-resize preservation, notification-warning presentation, and real event delivery outside the mocked browser IPC layer.
 
-## Follow-up static notes
+## Verification
 
-A controller follow-up was incorporated before final handoff:
+Final post-code evidence:
 
-- Capsule primary `busy` now includes `!tauriAvailable`, matching the expanded panel.
-- Capsule expand no longer synthesizes pointer state. It only reaffirms `focus-in` when the root actually matches `:focus-within`; real pointer/focus root events remain authoritative.
-- Desktop size requests queue while `getFloatingWindowPreferences` is unresolved. The current preference response establishes `floatingPreferences` and `lastSentSizeMode`, then marks sizing ready and drains the latest requested display mode. A failed preference read warns, marks ready, and drains without a browser invoke.
-- The exact floating E2E preserves its prescribed assertions and is covered by the file-wide beforeEach pageerror/console collection plus afterEach empty-array assertion; no duplicate listeners or in-test assertion are needed.
+- Direct focused reducer/coordinator files: 3 files, 22/22 tests passed.
+- `npm run check`: 0 errors, 0 warnings.
+- Direct focused Playwright (`active capsule|expanded idle companion`): 3/3 passed.
+- Full `npm run test:unit`: 9 files, 75/75 passed.
+- Responsive Playwright file: 10/10 passed.
+- Full Playwright: 22/22 passed.
+- `git diff --check`: exit 0; only Git line-ending notices.
+- Changed authorized source/test/report files: strict UTF-8 and nonempty.
+- Exact scoped status was reviewed before staging; unrelated dirt and generated artifacts were excluded.
 
-Additional rulings:
-
-- `Ruling: disable both capsule and expanded primary controls whenever tauriAvailable is false — unavailable native mutations must not appear actionable — cost if wrong: misleading browser/unavailable UI.`
-- `Ruling: let real root pointer/focus events drive expansion and make onExpand conditional on actual focus-within — reducer input must reflect DOM truth — cost if wrong: stranded focusInside or synthetic interaction state.`
-- `Ruling: make the initial preference read a barrier before native size drain — the read establishes the authoritative current mode before queued requests execute — cost if wrong: an older read response can overwrite newer command preferences or lastSent state.`
-- `Ruling: use the file-wide beforeEach/afterEach browser-error hook for the exact floating case — one listener set covers every responsive test and attaches failures consistently — cost if wrong: duplicate listeners or assertions add noise without improving coverage.`
-- `Ruling: capture the capsule control's logical focus target before reducer expansion and restore its expanded counterpart after tick — keyboard expansion must preserve user intent across DOM replacement — cost if wrong: focus falls to the document and collapse may arm while the user is interacting.`
-- `Ruling: ignore focusout only while a target-aware restoration token is pending — the destroyed capsule emits a transient departure before the expanded target can receive focus — cost if wrong: a false focus-out deadline races the restored focus or genuine departures are suppressed too broadly.`
-
-## Focus-preservation follow-up
-
-A direct active-capsule E2E is not feasible in browser preview because there is no Tauri/Pomodoro snapshot fixture. TDD therefore covers the pure logical mapping: direct Vitest first failed 1/10 because `floatingFocusTargetSelector` did not exist, then passed 10/10 after implementation. Capsule and expanded controls now carry matching `data-floating-focus-target` markers for `open-focus`, `primary`, and `expand`; the expanded stable target for capsule expand is the hide control. Root `focusin` captures the target synchronously, reducer expansion replaces the panel, `tick` restores that corresponding target, and transient destruction focusout is ignored only until restoration completes.
+Historical npm grep forwarding behavior remains documented above; all real focused E2E runs used direct Playwright.

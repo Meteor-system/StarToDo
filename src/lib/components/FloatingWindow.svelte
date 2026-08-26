@@ -24,6 +24,23 @@
     type Project,
     type Task
   } from '$lib/tasks';
+  import {
+    acceptPomodoroCommand,
+    acceptPomodoroRead,
+    beginPomodoroOperation,
+    createPomodoroCoordinationState
+  } from '$lib/floating-coordinator';
+  import {
+    acceptFloatingPreferencesRead,
+    acceptFloatingSizeFailure,
+    acceptFloatingSizeSuccess,
+    beginFloatingSizeRequest,
+    createFloatingSizeSyncState,
+    failFloatingPreferencesRead,
+    nextFloatingSizeRequest,
+    requestFloatingSize,
+    retryFloatingSize
+  } from '$lib/floating-size-sync';
   import { readUiPreferences, writeFloatingExpansionPreference } from '$lib/ui-preferences';
   import {
     getFloatingWindowPreferences,
@@ -50,33 +67,29 @@
 
   let tasks = $state<Task[]>([]);
   let projects = $state<Project[]>([]);
-  let snapshot = $state<PomodoroSnapshot | null>(null);
+  let pomodoroCoordination = $state(createPomodoroCoordinationState<PomodoroSnapshot>());
   let nowUnixMs = $state(Date.now());
   let pomodoroBusy = $state(false);
   let tasksWarning = $state<string | null>(null);
-  let pomodoroWarning = $state<string | null>(null);
+  let mutationWarning = $state<string | null>(null);
   let sizeWarning = $state<string | null>(null);
   const initialUiPreferences = readUiPreferences();
   let uiPreferences = $state(initialUiPreferences);
   let display = $state(createFloatingDisplayState(false, initialUiPreferences.floatingExpansion === 'always'));
-  let floatingPreferences = $state<FloatingWindowPreferences | null>(null);
+  let sizeSync = $state(createFloatingSizeSyncState<FloatingWindowPreferences>());
   let root: HTMLElement;
 
   let unlistenTasks: (() => void) | undefined;
   let unlistenPomodoro: (() => void) | undefined;
+  let runtimeInitialized = false;
   let clockTimer: ReturnType<typeof window.setInterval> | undefined;
   let tasksTimer: ReturnType<typeof window.setInterval> | undefined;
   let pomodoroTimer: ReturnType<typeof window.setInterval> | undefined;
   let collapseTimer: ReturnType<typeof window.setTimeout> | undefined;
   let disposed = false;
   let taskRefreshSequence = 0;
-  let pomodoroRefreshSequence = 0;
   let lastAcceptedFocusActive = false;
-  let lastSentSizeMode: FloatingSizeMode | null = null;
-  let requestedSizeMode: FloatingSizeMode | null = null;
-  let sizeCommandRunning = false;
   let sizeFlushQueued = false;
-  let floatingPreferencesReady = false;
   let pendingFocusRestore: FloatingFocusTarget | null = null;
   let focusRestoreSequence = 0;
   let previousHtmlMinWidth: string | undefined;
@@ -88,6 +101,11 @@
     return tauriAvailable && typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
   }
 
+  let snapshot = $derived(pomodoroCoordination.snapshot);
+  let pomodoroWarning = $derived(
+    mutationWarning ?? pomodoroCoordination.notificationWarning ?? pomodoroCoordination.readWarning
+  );
+  let floatingPreferences = $derived(sizeSync.preferences);
   let visibleTasks = $derived(sortTasks(tasks.filter((task) => {
     if (task.deletedAtUnixMs !== null || task.completedAtUnixMs !== null) return false;
     const today = todayLocalDate();
@@ -117,10 +135,11 @@
 
   function dispatchFloating(event: FloatingDisplayEvent): void {
     const next = reduceFloatingDisplay(display, event);
-    if (next === display) return;
-    display = next;
-    scheduleCollapse();
-    requestSizeSync(floatingSizeMode(next.mode));
+    if (next !== display) {
+      display = next;
+      scheduleCollapse();
+    }
+    requestSizeSync(floatingSizeMode(next.mode), event.type !== 'timeout');
   }
 
   function focusTargetFromEvent(event: FocusEvent): FloatingFocusTarget | null {
@@ -149,8 +168,7 @@
     if (sequence === focusRestoreSequence) pendingFocusRestore = null;
   }
 
-  function acceptSnapshot(nextSnapshot: PomodoroSnapshot): void {
-    snapshot = nextSnapshot;
+  function applyAcceptedSnapshot(nextSnapshot: PomodoroSnapshot): void {
     const nextFocusActive = nextSnapshot.currentSession?.status === 'running' || nextSnapshot.currentSession?.status === 'paused';
     if (nextFocusActive !== lastAcceptedFocusActive) {
       lastAcceptedFocusActive = nextFocusActive;
@@ -160,15 +178,22 @@
 
   async function refreshPomodoro(): Promise<void> {
     if (!isTauriRuntime()) return;
-    const sequence = ++pomodoroRefreshSequence;
+    const operation = beginPomodoroOperation(pomodoroCoordination);
+    pomodoroCoordination = operation.state;
     try {
       const view = await getPomodoroView();
-      if (disposed || sequence !== pomodoroRefreshSequence) return;
-      acceptSnapshot(view.snapshot);
-      pomodoroWarning = null;
+      if (disposed) return;
+      const previous = pomodoroCoordination;
+      pomodoroCoordination = acceptPomodoroRead(previous, operation.token, view.snapshot, null);
+      if (pomodoroCoordination !== previous) applyAcceptedSnapshot(view.snapshot);
     } catch (error) {
-      if (disposed || sequence !== pomodoroRefreshSequence) return;
-      pomodoroWarning = `专注状态读取失败：${errorMessage(error)}`;
+      if (disposed) return;
+      pomodoroCoordination = acceptPomodoroRead(
+        pomodoroCoordination,
+        operation.token,
+        null,
+        `专注状态读取失败：${errorMessage(error)}`
+      );
     }
   }
 
@@ -190,15 +215,23 @@
   async function runPomodoroCommand(command: () => Promise<PomodoroMutationResult>): Promise<void> {
     if (!isTauriRuntime() || pomodoroBusy) return;
     pomodoroBusy = true;
-    ++pomodoroRefreshSequence;
+    mutationWarning = null;
+    const operation = beginPomodoroOperation(pomodoroCoordination);
+    pomodoroCoordination = operation.state;
     try {
       const result = await command();
       if (disposed) return;
-      acceptSnapshot(result.snapshot);
-      pomodoroWarning = result.notificationWarning ?? null;
+      const previous = pomodoroCoordination;
+      pomodoroCoordination = acceptPomodoroCommand(
+        previous,
+        operation.token,
+        result.snapshot,
+        result.notificationWarning ?? null
+      );
+      if (pomodoroCoordination !== previous) applyAcceptedSnapshot(result.snapshot);
       void refreshPomodoro();
     } catch (error) {
-      if (!disposed) pomodoroWarning = `专注操作失败：${errorMessage(error)}`;
+      if (!disposed) mutationWarning = `专注操作失败：${errorMessage(error)}`;
     } finally {
       if (!disposed) pomodoroBusy = false;
     }
@@ -217,7 +250,7 @@
     try {
       await openFocusFromFloating();
     } catch (error) {
-      if (!disposed) pomodoroWarning = `无法打开专注工作区：${errorMessage(error)}`;
+      if (!disposed) mutationWarning = `无法打开专注工作区：${errorMessage(error)}`;
     }
   }
 
@@ -245,24 +278,39 @@
     dispatchFloating({ type: 'always-expanded', value, at: Date.now() });
   }
 
-  async function resetAutoSize(): Promise<void> {
-    if (!isTauriRuntime()) return;
+  async function reconcileFloatingPreferences(generation: number): Promise<void> {
     try {
-      const next = await resetFloatingAutoSize();
-      if (disposed) return;
-      floatingPreferences = next;
-      lastSentSizeMode = next.displayMode;
-      sizeWarning = null;
-      requestSizeSync(floatingSizeMode(display.mode));
-    } catch (error) {
-      if (!disposed) sizeWarning = `恢复自动尺寸失败：${errorMessage(error)}`;
+      const next = await getFloatingWindowPreferences();
+      if (disposed || sizeSync.desired?.generation !== generation) return;
+      sizeSync = acceptFloatingPreferencesRead(sizeSync, next);
+    } catch {
+      // The original command warning is more actionable; reconciliation is best effort.
     }
   }
 
-  function requestSizeSync(mode: FloatingSizeMode): void {
+  async function resetAutoSize(): Promise<void> {
     if (!isTauriRuntime()) return;
-    requestedSizeMode = mode;
-    if (!floatingPreferencesReady || sizeCommandRunning || sizeFlushQueued) return;
+    const generation = sizeSync.generation;
+    try {
+      const next = await resetFloatingAutoSize();
+      if (disposed || sizeSync.generation !== generation) return;
+      sizeSync = { ...sizeSync, preferences: next };
+      sizeWarning = null;
+      requestSizeSync(floatingSizeMode(display.mode), true);
+    } catch (error) {
+      if (!disposed) {
+        sizeWarning = `恢复自动尺寸失败：${errorMessage(error)}`;
+        void reconcileFloatingPreferences(sizeSync.desired?.generation ?? sizeSync.generation);
+      }
+    }
+  }
+
+  function requestSizeSync(mode: FloatingSizeMode, explicit = false): void {
+    if (!isTauriRuntime()) return;
+    const failedCurrent = sizeSync.failed?.generation === sizeSync.desired?.generation;
+    if (explicit && failedCurrent) sizeSync = retryFloatingSize(sizeSync);
+    if (sizeSync.desired?.mode !== mode) sizeSync = requestFloatingSize(sizeSync, mode);
+    if (sizeFlushQueued || nextFloatingSizeRequest(sizeSync) === null) return;
     sizeFlushQueued = true;
     queueMicrotask(() => {
       sizeFlushQueued = false;
@@ -271,38 +319,30 @@
   }
 
   async function flushSizeSync(): Promise<void> {
-    if (!floatingPreferencesReady || sizeCommandRunning || disposed || !isTauriRuntime()) return;
-    sizeCommandRunning = true;
+    if (disposed || !isTauriRuntime()) return;
+    const request = nextFloatingSizeRequest(sizeSync);
+    if (request === null) return;
+    sizeSync = beginFloatingSizeRequest(sizeSync, request);
     try {
-      while (!disposed) {
-        const mode = requestedSizeMode;
-        requestedSizeMode = null;
-        if (mode === null) break;
-        if (mode === lastSentSizeMode) continue;
-        try {
-          const next = await setFloatingDisplayMode(mode);
-          if (disposed) return;
-          if (requestedSizeMode === null || requestedSizeMode === mode) {
-            floatingPreferences = next;
-          }
-          lastSentSizeMode = mode;
-          sizeWarning = null;
-        } catch (error) {
-          if (!disposed) sizeWarning = `悬浮窗尺寸同步失败：${errorMessage(error)}`;
-          break;
-        }
+      const next = await setFloatingDisplayMode(request.mode);
+      if (disposed) return;
+      sizeSync = acceptFloatingSizeSuccess(sizeSync, request, next);
+      if (sizeSync.desired?.generation === request.generation) sizeWarning = null;
+    } catch (error) {
+      if (disposed) return;
+      sizeSync = acceptFloatingSizeFailure(sizeSync, request);
+      if (sizeSync.desired?.generation === request.generation) {
+        sizeWarning = `悬浮窗尺寸同步失败：${errorMessage(error)}`;
       }
+      await reconcileFloatingPreferences(request.generation);
     } finally {
-      sizeCommandRunning = false;
-      if (!disposed && requestedSizeMode !== null && requestedSizeMode !== lastSentSizeMode) {
-        void flushSizeSync();
-      }
+      const next = nextFloatingSizeRequest(sizeSync);
+      if (!disposed && next !== null) void flushSizeSync();
     }
   }
 
-  function expandFromCapsule(): void {
-    if (!root.matches(':focus-within')) return;
-    dispatchFloating({ type: 'focus-in', at: Date.now() });
+  function activateFloating(): void {
+    dispatchFloating({ type: 'activate', at: Date.now() });
   }
 
   function handleFocusOut(event: FocusEvent): void {
@@ -311,37 +351,22 @@
     dispatchFloating({ type: 'focus-out', at: Date.now() });
   }
 
-  onMount(() => {
-    previousHtmlMinWidth = document.documentElement.style.minWidth;
-    previousHtmlOverflow = document.documentElement.style.overflow;
-    previousBodyMinWidth = document.body.style.minWidth;
-    previousBodyOverflow = document.body.style.overflow;
-    document.documentElement.style.minWidth = '0';
-    document.documentElement.style.overflow = 'hidden';
-    document.body.style.minWidth = '0';
-    document.body.style.overflow = 'hidden';
-
-    scheduleCollapse();
-    requestSizeSync(floatingSizeMode(display.mode));
-    clockTimer = window.setInterval(() => { nowUnixMs = Date.now(); }, 1_000);
-
-    if (!isTauriRuntime()) return;
+  function initializeRuntime(): void {
+    if (runtimeInitialized || disposed || !isTauriRuntime()) return;
+    runtimeInitialized = true;
     void refreshPomodoro();
     void refreshTasks();
     void (async () => {
       try {
         const next = await getFloatingWindowPreferences();
         if (disposed) return;
-        floatingPreferences = next;
-        lastSentSizeMode = next.displayMode;
+        sizeSync = acceptFloatingPreferencesRead(sizeSync, next);
       } catch (error) {
         if (disposed) return;
+        sizeSync = failFloatingPreferencesRead(sizeSync);
         sizeWarning = `悬浮窗偏好读取失败：${errorMessage(error)}`;
       } finally {
-        if (!disposed) {
-          floatingPreferencesReady = true;
-          requestSizeSync(floatingSizeMode(display.mode));
-        }
+        if (!disposed) requestSizeSync(floatingSizeMode(display.mode));
       }
     })();
 
@@ -360,15 +385,40 @@
         const unlisten = await listen('pomodoro-state-changed', () => { if (!disposed) void refreshPomodoro(); });
         if (disposed) unlisten(); else unlistenPomodoro = unlisten;
       } catch (error) {
-        if (!disposed) pomodoroWarning = `专注状态监听失败，已改用定期刷新：${errorMessage(error)}`;
+        if (!disposed) {
+          pomodoroCoordination = {
+            ...pomodoroCoordination,
+            readWarning: `专注状态监听失败，已改用定期刷新：${errorMessage(error)}`
+          };
+        }
       }
     })();
+  }
+
+  $effect(() => {
+    if (tauriAvailable) initializeRuntime();
+  });
+
+  onMount(() => {
+    previousHtmlMinWidth = document.documentElement.style.minWidth;
+    previousHtmlOverflow = document.documentElement.style.overflow;
+    previousBodyMinWidth = document.body.style.minWidth;
+    previousBodyOverflow = document.body.style.overflow;
+    document.documentElement.style.minWidth = '0';
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.minWidth = '0';
+    document.body.style.overflow = 'hidden';
+
+    scheduleCollapse();
+    requestSizeSync(floatingSizeMode(display.mode));
+    clockTimer = window.setInterval(() => { nowUnixMs = Date.now(); }, 1_000);
+    initializeRuntime();
   });
 
   onDestroy(() => {
     disposed = true;
     ++taskRefreshSequence;
-    ++pomodoroRefreshSequence;
+    pomodoroCoordination = beginPomodoroOperation(pomodoroCoordination).state;
     if (clockTimer !== undefined) window.clearInterval(clockTimer);
     if (tasksTimer !== undefined) window.clearInterval(tasksTimer);
     if (pomodoroTimer !== undefined) window.clearInterval(pomodoroTimer);
@@ -404,7 +454,7 @@
         busy={pomodoroBusy || primaryAction === 'none' || !tauriAvailable}
         onOpenFocus={() => void openFocus()}
         onPrimary={handlePrimaryAction}
-        onExpand={expandFromCapsule}
+        onExpand={activateFloating}
       />
     {:else}
       <FloatingExpandedPanel
