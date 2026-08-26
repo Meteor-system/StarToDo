@@ -126,11 +126,11 @@ A controller follow-up was incorporated before final handoff:
 - Capsule primary `busy` now includes `!tauriAvailable`, matching the expanded panel.
 - Capsule expand no longer synthesizes pointer state. It only reaffirms `focus-in` when the root actually matches `:focus-within`; real pointer/focus root events remain authoritative.
 - Desktop size requests queue while `getFloatingWindowPreferences` is unresolved. The current preference response establishes `floatingPreferences` and `lastSentSizeMode`, then marks sizing ready and drains the latest requested display mode. A failed preference read warns, marks ready, and drains without a browser invoke.
-- The exact floating E2E preserves its prescribed assertions and explicitly asserts the test-local console/pageerror collection is empty, in addition to the suite afterEach assertion.
+- The exact floating E2E preserves its prescribed assertions and is covered by the file-wide beforeEach pageerror/console collection plus afterEach empty-array assertion; no duplicate listeners or in-test assertion are needed.
 
 Additional rulings:
 
 - `Ruling: disable both capsule and expanded primary controls whenever tauriAvailable is false — unavailable native mutations must not appear actionable — cost if wrong: misleading browser/unavailable UI.`
 - `Ruling: let real root pointer/focus events drive expansion and make onExpand conditional on actual focus-within — reducer input must reflect DOM truth — cost if wrong: stranded focusInside or synthetic interaction state.`
 - `Ruling: make the initial preference read a barrier before native size drain — the read establishes the authoritative current mode before queued requests execute — cost if wrong: an older read response can overwrite newer command preferences or lastSent state.`
-- `Ruling: assert browser errors inside the exact floating test as well as afterEach — the required case carries direct no-error evidence — cost if wrong: failures remain only indirectly attributed during teardown.`
+- `Ruling: use the file-wide beforeEach/afterEach browser-error hook for the exact floating case — one listener set covers every responsive test and attaches failures consistently — cost if wrong: duplicate listeners or assertions add noise without improving coverage.`
