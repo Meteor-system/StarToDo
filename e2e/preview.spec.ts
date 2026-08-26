@@ -206,6 +206,66 @@ test('scrolling is confined to visible declared local regions at 520x420', async
   expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? -1)).toBe(0);
 });
 
+test('dismisses the current Pomodoro warning without swallowing a different warning', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('startodo.auto-immersive', 'disabled');
+    const callbacks = new Map<number, (payload: unknown) => void>();
+    let callbackId = 0;
+    let warning = '通知主机不可用：warning A';
+    const snapshot = {
+      settings: { focusMinutes: 25, shortBreakMinutes: 5, longBreakMinutes: 15, longBreakInterval: 4, updatedAtUnixMs: Date.now() },
+      currentSession: null,
+      completedFocusesInCycle: 0,
+      recommendedPhase: 'focus',
+      completedFocusTodayCount: 0
+    };
+
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        transformCallback(callback: (payload: unknown) => void) {
+          const id = ++callbackId;
+          callbacks.set(id, callback);
+          return id;
+        },
+        unregisterCallback(id: number) { callbacks.delete(id); },
+        async invoke(command: string) {
+          if (command === 'get_pomodoro_view') return { snapshot, taskSummaries: [] };
+          if (command === 'get_pomodoro') return snapshot;
+          if (command === 'start_pomodoro') {
+            const currentWarning = warning;
+            warning = '通知主机不可用：warning B';
+            return { snapshot, notificationWarning: currentWarning };
+          }
+          if (command === 'list_tasks' || command === 'list_projects' || command === 'list_reminders') return [];
+          if (command === 'list_deleted_tasks' || command === 'list_missed_reminders' || command === 'list_reliability_incidents') return [];
+          if (command === 'get_window_preferences') return { maximized: true, normalBounds: { x: null, y: null, width: 960, height: 680 }, alwaysOnTop: false, autoImmersive: 'ask', lastImmersive: false };
+          if (command === 'get_window_state') return { maximized: true, fullscreen: false, alwaysOnTop: false, normalBounds: { x: null, y: null, width: 960, height: 680 } };
+          if (command === 'claim_pending_pomodoro_activations' || command === 'claim_pending_activations') return { claimId: null, items: [] };
+          if (command === 'reconcile_reminders') return { warning: null };
+          if (command === 'take_pending_floating_intent') return null;
+          if (command === 'plugin:event|listen') return 1;
+          if (command === 'plugin:event|unlisten' || command === 'record_ui_ready' || command === 'record_ui_not_ready') return null;
+          console.error(`Unexpected mocked Tauri command: ${command}`);
+          throw new Error(`Unexpected mocked Tauri command: ${command}`);
+        }
+      }
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '专注', exact: true }).click();
+  const start = page.getByRole('button', { name: '开始专注' });
+
+  await start.click();
+  const warningA = page.getByLabel('通知').getByRole('alert').filter({ hasText: 'warning A' });
+  await expect(warningA).toBeVisible();
+  await warningA.getByRole('button', { name: '关闭通知' }).click();
+  await expect(warningA).not.toBeAttached();
+  await expect(page.getByLabel('通知').getByText('warning A')).not.toBeAttached();
+
+  await start.click();
+  await expect(page.getByLabel('通知').getByRole('alert').filter({ hasText: 'warning B' })).toBeVisible();
+});
+
 test('shows an explicit diagnostics error when a Tauri-only action is requested', async ({ page }) => {
   await page.goto('/');
 

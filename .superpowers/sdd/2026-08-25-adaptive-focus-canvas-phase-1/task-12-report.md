@@ -56,7 +56,16 @@
 - Second native Important RED — UI Release: in the disposable environment at real 520 x 420, controller closed the warning toast, keyboard-opened diagnostics, and invoked real `释放 UI`. CDP page closed and the command returned, but PID 91492 exited; starting the same smoke binary produced new long-lived PID 134064 rather than the existing process rebuilding a WebView. This proves Release UI behaved as Quit and lost in-memory coordination.
 - UI Release root cause: `run()` ended with Tauri’s convenience `.run(generate_context!())` and supplied no `RunEvent::ExitRequested` policy. Destroying the last window generated implicit `code=None` exit; explicit tray Quit separately calls `app.exit(0)`.
 - UI Release TDD: pure test first referenced missing `should_prevent_exit` and valid RED exited 1 with three E0425 errors. Implementation builds the app and runs it with a callback that calls `api.prevent_exit()` only when `code.is_none()`; explicit `Some(0)` and other explicit codes remain allowed. Focused GREEN 1/1; full Rust 86/86 plus 0 main/0 docs; fmt-check passed; frontend check 0 errors/0 warnings.
-- UI Release native status: not GREEN. Controller must rebuild/rerun and prove Release closes the page while the original PID stays alive with no main window, a second-instance callback recreates the WebView in that same PID, and restored bounds are correct.
+- UI Release native GREEN: controller’s latest isolated rebuild closed CDP while original PID 139084 remained alive; second instance PID 137180 exited 0; the WebView rebuilt in PID 139084 with exact inner 960 x 680 bounds.
+- Normal-placement native GREEN: the same build started with preferences maximized=true/normal 960 x 680; real unmaximize restored exact inner 960 x 680 at x=260,y=260 rather than the prior 2560 x 1369 corruption.
+
+## Third native Important — Pomodoro warning dismissal
+
+- Controller native RED: with notification host absent, real Pomodoro start committed in isolated SQLite but produced `pomodoroWarning`. `+page.svelte` rendered the toast without `onDismiss` or dismissed-state filtering while `ToastStack` exposed `关闭通知`. Repeated activation for 120 seconds left the toast and focused close button present, overlaying controls; diagnostics did not open.
+- Root cause: the shared toast always exposes dismissal UI, but the Pomodoro warning omitted its callback. Reusing one permanent `pomodoro:warning` dismissal key would also suppress all later warnings.
+- E2E TDD: fixture setup iterations exposed selector and required-command assumptions before reaching the behavior. Valid RED exited 1 because warning A remained attached after `关闭通知`. GREEN injects A, dismisses it, proves A’s toast remains absent, then injects distinct B and proves B appears; focused 1/1 passed in 8.3 s with browser-error hooks active.
+- Minimal fix: warning text participates in the Pomodoro toast ID, `dismissedToastIds` is consulted, and `onDismiss` is supplied. Dismissing A does not swallow B. Backend/Pomodoro persistence is unchanged.
+- Gates: full Playwright 31/31 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings. Controller native retest of the close control remains pending; no native GREEN is claimed for this third finding.
 
 ## Windows smoke
 
@@ -81,6 +90,7 @@
 - Ruling: Use an explicit pure placement plan as the smallest deterministic Rust regression — Tauri `WebviewWindow` is not cheaply mockable, while the ordered OS calls are the defect boundary — cost if wrong: the pure test cannot prove Windows honors the calls, so native GREEN is intentionally withheld.
 - Ruling: Prevent only implicit `ExitRequested` events with `code=None` — Release UI must preserve the tray/single-instance process, while explicit tray Quit uses `app.exit(0)` and must terminate — cost if wrong: another legitimate no-code exit source could be held open; current product authority treats no-code last-window exit as implicit and coded exit as explicit.
 - Ruling: Test the exit decision as a pure code policy and leave same-PID recreation to isolated native smoke — Tauri runner APIs are integration boundaries and process identity cannot be proven by a unit test — cost if wrong: unit GREEN may not reflect a platform-specific event variant, hence controller native GREEN remains mandatory.
+- Ruling: Key Pomodoro toast dismissal by the complete warning value — current warning sources expose meaningful string changes but no independent warning epoch, and message-specific identity dismisses only the observed warning — cost if wrong: an identical later warning is intentionally still considered the same current warning and remains dismissed until its value changes away and back through future state-model work.
 
 ## Deferred Minors and blockers
 

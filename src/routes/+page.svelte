@@ -108,6 +108,9 @@
   let pomodoroWarning = $derived(
     pomodoroActivationWarning ?? pomodoroListenerWarning ?? pomodoroCommandWarning ?? pomodoroRefreshWarning
   );
+  let pomodoroWarningToastId = $derived(
+    pomodoroWarning === null ? null : `pomodoro:warning:${pomodoroWarning}`
+  );
   let dismissedToastIds = $state<Set<string>>(new Set());
   let toasts = $derived<ToastMessage[]>([
     ...(reconcileWarning && !dismissedToastIds.has('reminders:reconcile') ? [{
@@ -140,7 +143,12 @@
       message: floatingWindowError,
       onDismiss: () => dismissToast('floating-window:error')
     }] : []),
-    ...(pomodoroWarning ? [{ id: 'pomodoro:warning', tone: 'warning' as const, message: pomodoroWarning }] : [])
+    ...(pomodoroWarning && pomodoroWarningToastId && !dismissedToastIds.has(pomodoroWarningToastId) ? [{
+      id: pomodoroWarningToastId,
+      tone: 'warning' as const,
+      message: pomodoroWarning,
+      onDismiss: () => dismissToast(pomodoroWarningToastId)
+    }] : [])
   ]);
 
   function dismissToast(id: string): void {
