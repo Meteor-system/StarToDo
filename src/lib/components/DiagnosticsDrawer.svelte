@@ -103,8 +103,7 @@
   }
 </script>
 
-<details class:compact={false} class="diagnostics">
-  <summary>诊断与桌面控制</summary>
+<div class="diagnostics">
   <div class="content">
     <div class="overview"><div><span class="label">UI RUN</span><code>{uiRunId}</code></div></div>
     <section class="panel"><div class="panel-heading"><h3>运行时快照</h3><button aria-label="刷新运行时快照" onclick={refreshSnapshot} disabled={actions.snapshot.busy}>{actions.snapshot.busy ? '读取中…' : '刷新'}</button></div>{#if entries(runtimeSnapshot).length}<dl>{#each entries(runtimeSnapshot) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>等待首次运行时快照。</p>{/if}{#if actions.snapshot.error}<p class="error" role="alert">{actions.snapshot.error}</p>{/if}</section>
@@ -115,13 +114,10 @@
     <footer><label><input type="checkbox" checked={alwaysOnTop} onchange={changeAlwaysOnTop} disabled={actions.alwaysOnTop.busy} /> 始终置顶</label><div class="actions"><button onclick={hideToTray} disabled={actions.tray.busy}>{actions.tray.busy ? '处理中…' : '隐藏至托盘'}</button><button class="danger" onclick={releaseUi} disabled={actions.release.busy || reminderWarningListenerToken === null}>{actions.release.busy ? '释放中…' : '释放 UI'}</button></div></footer>
     {#if actions.alwaysOnTop.error || actions.tray.error || actions.release.error}<p class="error" role="alert">{actions.alwaysOnTop.error ?? actions.tray.error ?? actions.release.error}</p>{/if}
   </div>
-</details>
+</div>
 
 <style>
-  .diagnostics { margin-top:8px; padding:14px 0 0; border-top:1px solid var(--line); color:var(--muted); font-size:12px; opacity:.82; }
-  .diagnostics:not([open]) { opacity:.68; }
-  .diagnostics summary { cursor:pointer; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.04em; }
-  .diagnostics[open] summary { color:var(--text-soft); }
+  .diagnostics { color:var(--muted); font-size:12px; }
   .content { padding-top:12px; }
   .overview,.panel-heading,footer,.actions { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .label { display:block; margin-bottom:4px; font-size:10px; letter-spacing:.1em; }

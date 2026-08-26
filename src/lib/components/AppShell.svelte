@@ -36,7 +36,6 @@
     <button type="button" class:active={activeScene === 'focus'} aria-current={activeScene === 'focus' ? 'page' : undefined} onclick={() => onSceneChange('focus')}>专注</button>
   </nav>
   <main class="scene-canvas" aria-label={activeScene === 'tasks' ? '任务场景' : '专注场景'}>
-    <h1 class="sr-only">{activeScene === 'tasks' ? '任务' : '专注'}</h1>
     {@render children()}
   </main>
   <ContextDrawer open={openDrawer === 'diagnostics'} drawerId="diagnostics-drawer" title="设置与诊断" size="wide" onClose={onCloseDrawer}>
@@ -46,7 +45,6 @@
 </div>
 
 <style>
-  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .app-header { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:16px clamp(14px,4vw,36px); border-bottom:1px solid var(--line); }
   .identity,.shell-actions,.status { display:flex; align-items:center; }
   .identity { gap:11px; }.shell-actions { gap:12px; }.shell-actions button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 9px; color:var(--text-soft); background:var(--surface); font-size:12px; }

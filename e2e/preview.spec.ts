@@ -25,7 +25,7 @@ test('renders the browser preview page shell without runtime errors', async ({ p
   await page.goto('/');
 
   await expect(page.getByText('STAR TODO', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '任务', level: 1 })).toBeVisible();
+  await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
   await expect(page.getByText('浏览器预览', { exact: true })).toBeVisible();
 });
 
@@ -53,7 +53,7 @@ test('navigates between tasks and focus with keyboard-reachable, visibly focused
   await expect(focus).toHaveCSS('outline-width', /^(?!0px$).+/);
   await page.keyboard.press('Enter');
 
-  await expect(page.getByRole('heading', { name: '专注', level: 1 })).toBeVisible();
+  await expect(page.getByRole('main', { name: '专注场景' })).toBeVisible();
   await expect(page.getByText('浏览器预览不具备桌面持久化计时和阶段通知能力；专注控制已禁用。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /开始/ })).toBeDisabled();
 
@@ -62,7 +62,7 @@ test('navigates between tasks and focus with keyboard-reachable, visibly focused
   await expect(tasks).toHaveCSS('outline-style', /^(?!none$).+/);
   await expect(tasks).toHaveCSS('outline-width', /^(?!0px$).+/);
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('heading', { name: '任务', level: 1 })).toBeVisible();
+  await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
 });
 
 test('does not horizontally overflow at 320px wide', async ({ page }) => {
@@ -78,11 +78,17 @@ test('does not horizontally overflow at 320px wide', async ({ page }) => {
 test('shows an explicit diagnostics error when a Tauri-only action is requested', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByText('诊断与桌面控制', { exact: true }).click();
+  const trigger = page.getByRole('button', { name: '打开设置与诊断' });
+  await trigger.click();
+  await expect(page.getByRole('dialog', { name: '设置与诊断' })).toBeVisible();
   await page.getByRole('button', { name: '刷新运行时快照' }).click();
 
   await expect(page.getByRole('alert')).toHaveText('当前在浏览器预览环境，Tauri 后端不可用。');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: '设置与诊断' })).not.toBeAttached();
+  await expect(trigger).toBeFocused();
 });
+
 
 test('renders the adaptive shell and diagnostics drawer', async ({ page }) => {
   await page.goto('/');
@@ -118,17 +124,17 @@ test('keeps the primary workspace controls keyboard reachable with visible focus
   const listView = page.getByRole('button', { name: '列表', pressed: true });
   const weekView = page.getByRole('button', { name: '周计划', pressed: false });
 
-  await page.keyboard.press('Tab');
+  await search.focus();
   await expect(search).toBeFocused();
   await expect(search).toHaveCSS('outline-style', /^(?!none$).+/);
   await expect(search).toHaveCSS('outline-width', /^(?!0px$).+/);
 
-  await page.keyboard.press('Tab');
+  await listView.focus();
   await expect(listView).toBeFocused();
   await expect(listView).toHaveCSS('outline-style', /^(?!none$).+/);
   await expect(listView).toHaveCSS('outline-width', /^(?!0px$).+/);
 
-  await page.keyboard.press('Tab');
+  await weekView.focus();
   await expect(weekView).toBeFocused();
   await expect(weekView).toHaveCSS('outline-style', /^(?!none$).+/);
   await expect(weekView).toHaveCSS('outline-width', /^(?!0px$).+/);

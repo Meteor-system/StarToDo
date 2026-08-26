@@ -82,7 +82,6 @@
   let activeScene = $state<AppScene>('tasks');
   let openDrawer = $state<ShellDrawer>(null);
   let immersiveDisplay = $state<ImmersiveDisplayState>('off');
-  let toasts = $state<ToastMessage[]>([]);
   let pomodoroSnapshot = $state<PomodoroSnapshot | null>(null);
   let pomodoroTaskSummaries = $state<PomodoroTaskSummary[]>([]);
   let pomodoroBusy = $state(false);
@@ -94,6 +93,44 @@
   let pomodoroWarning = $derived(
     pomodoroActivationWarning ?? pomodoroListenerWarning ?? pomodoroCommandWarning ?? pomodoroRefreshWarning
   );
+  let dismissedToastIds = $state<Set<string>>(new Set());
+  let toasts = $derived<ToastMessage[]>([
+    ...(reconcileWarning && !dismissedToastIds.has('reminders:reconcile') ? [{
+      id: 'reminders:reconcile',
+      tone: 'warning' as const,
+      message: `提醒同步警告：${reconcileWarning}`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast('reminders:reconcile')
+    }] : []),
+    ...mutationWarnings.filter((warning) => !dismissedToastIds.has(`reminders:mutation:${warning.id}`)).map((warning) => ({
+      id: `reminders:mutation:${warning.id}`,
+      tone: 'warning' as const,
+      message: `${warning.taskId === null ? '任务' : `任务 #${warning.taskId}`}${warningOperationLabel(warning.operation)}后提醒同步失败：${warning.message}`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast(`reminders:mutation:${warning.id}`)
+    })),
+    ...(missedCount && !dismissedToastIds.has('reminders:missed') ? [{
+      id: 'reminders:missed',
+      tone: 'warning' as const,
+      message: `有 ${missedCount} 个提醒已错过，涉及任务：${missedTaskIds.join('、')}。`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast('reminders:missed')
+    }] : []),
+    ...(floatingWindowError && !dismissedToastIds.has('floating-window:error') ? [{
+      id: 'floating-window:error',
+      tone: 'danger' as const,
+      message: floatingWindowError,
+      onDismiss: () => dismissToast('floating-window:error')
+    }] : []),
+    ...(pomodoroWarning ? [{ id: 'pomodoro:warning', tone: 'warning' as const, message: pomodoroWarning }] : [])
+  ]);
+
+  function dismissToast(id: string): void {
+    dismissedToastIds = new Set([...dismissedToastIds, id]);
+  }
   let selectedFocusTaskId = $state<number | null>(null);
   let pomodoroCounts = $derived(new Map(pomodoroTaskSummaries.map((summary) => [summary.taskId, summary.completedFocusCount])));
 
@@ -673,16 +710,6 @@
   onToggleFloating={handleToggleFloatingWindow}
 >
   {#snippet children()}
-  {#if reconcileWarning || mutationWarnings.length || missedCount}
-    <section class="page-alert" aria-live="polite">
-      {#if reconcileWarning}<p>提醒同步警告：{reconcileWarning}</p>{/if}
-      {#each mutationWarnings as warning (warning.id)}
-        <p>{warning.taskId === null ? '任务' : `任务 #${warning.taskId}`}{warningOperationLabel(warning.operation)}后提醒同步失败：{warning.message}</p>
-      {/each}
-      {#if missedCount}<p>有 {missedCount} 个提醒已错过，涉及任务：{missedTaskIds.join('、')}。</p>{/if}
-      <button onclick={resyncReminders} disabled={reminderResyncBusy}>{reminderResyncBusy ? '同步中…' : '重新同步提醒'}</button>
-    </section>
-  {/if}
   {#if tauriAvailable && activeScene === 'tasks'}
     <FocusMiniBar
       {tauriAvailable}
@@ -730,9 +757,6 @@
   {/if}
   {/snippet}
   {#snippet diagnosticsContent()}
-    <button type="button" class="legacy-diagnostics-trigger" onclick={() => openDrawer = 'diagnostics'}>诊断与桌面控制</button>
-  <details open>
-    <summary>诊断与桌面控制</summary>
   <DiagnosticsDrawer
       {tauriAvailable}
       {uiRunId}
@@ -745,7 +769,6 @@
       {reminderWarningListenerToken}
       onReminderReconcile={requestReminderReconcile}
     />
-  </details>
   {/snippet}
 </AppShell>
 {/if}
