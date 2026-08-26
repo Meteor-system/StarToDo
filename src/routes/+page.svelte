@@ -286,6 +286,7 @@
     input: StartPomodoroInput,
     immerse: boolean
   ): Promise<void> {
+    if (pomodoroBusy) return;
     const enterIntentToken = immerse ? ++immersiveIntentEpoch : null;
     const started = await runPomodoroCommand(
       () => startPomodoro(input),
