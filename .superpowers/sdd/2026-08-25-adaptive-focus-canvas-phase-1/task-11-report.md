@@ -111,7 +111,7 @@ Independent review found no Critical issues. Three Important issues were fixed b
 - `Ruling: microtask-coalesce then serialize native size requests — rapid same-turn transitions collapse to the latest target while in-flight commands remain ordered — cost if wrong: obsolete resize flicker or stale response wins.`
 - `Ruling: do not permanently blacklist failed size modes — persistent failures must not spin, but later user/state transitions may retry — cost if wrong: transient failure disables sizing for the rest of the mount.`
 - `Ruling: restore the logical primary focus target after a focused mode swap — reducer-driven DOM replacement must not strand keyboard users — cost if wrong: focus loss and premature collapse.`
-- `Ruling: use transient pointer enter/leave events for the explicit capsule expand control — this expands through the existing reducer without inventing keyboard focus state — cost if wrong: expansion can remain stranded indefinitely.`
+- `Ruling: let root pointer/focus events drive capsule expansion and only reaffirm focus-in when the root actually matches :focus-within — reducer state must follow DOM truth without synthetic pointer state — cost if wrong: expansion can become stranded or collapse while keyboard focus is active.`
 - `Ruling: keep warning overlay outside both pure visual component interfaces — exact Props remain binding and warnings stay coordinator-owned — cost if wrong: component API drift or business concerns leak into visuals.`
 
 ## Minors
