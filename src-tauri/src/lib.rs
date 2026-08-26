@@ -1557,10 +1557,16 @@ fn install_main_window_tracking(app: &AppHandle, window: &WebviewWindow) {
         if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
             return;
         }
-        if window_for_events.is_fullscreen().unwrap_or(false) {
+        let fullscreen = window_for_events.is_fullscreen().unwrap_or(false);
+        let mut preferences = read_window_preferences(&app_for_events);
+        if fullscreen {
+            preferences.last_immersive = true;
+            let _ = save_window_preferences_to_disk(&app_for_events, &preferences);
             return;
         }
-        let mut preferences = read_window_preferences(&app_for_events);
+        if preferences.last_immersive {
+            preferences.last_immersive = false;
+        }
         preferences.maximized = window_for_events.is_maximized().unwrap_or(false);
         if !preferences.maximized {
             if let Ok(scale) = window_for_events.scale_factor() {
@@ -1593,8 +1599,8 @@ fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
             .map_err(string_error)?
             .build()
             .map_err(string_error)?;
-        apply_window_preferences(&window, &preferences)?;
         install_close_to_tray_behavior(&window);
+        install_main_window_tracking(app, &window);
     }
 
     let window = app
@@ -3030,27 +3036,29 @@ fn save_window_preferences(app: AppHandle, preferences: WindowPreferences) -> Re
 
 #[tauri::command]
 fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    let mut preferences = read_window_preferences(&app);
     match mode.as_str() {
-        "normal" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .unmaximize()
-            .map_err(string_error),
-        "minimized" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .minimize()
-            .map_err(string_error),
-        "maximized" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .maximize()
-            .map_err(string_error),
-        "fullscreen" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .set_fullscreen(true)
-            .map_err(string_error),
+        "normal" => {
+            window.unmaximize().map_err(string_error)?;
+            preferences.maximized = false;
+            preferences.last_immersive = false;
+            save_window_preferences_to_disk(&app, &preferences)
+        }
+        "minimized" => window.minimize().map_err(string_error),
+        "maximized" => {
+            window.maximize().map_err(string_error)?;
+            preferences.maximized = true;
+            preferences.last_immersive = false;
+            save_window_preferences_to_disk(&app, &preferences)
+        }
+        "fullscreen" => {
+            window.set_fullscreen(true).map_err(string_error)?;
+            preferences.last_immersive = true;
+            save_window_preferences_to_disk(&app, &preferences)
+        }
         _ => Err("window mode must be normal, minimized, maximized, or fullscreen".to_string()),
     }
 }
