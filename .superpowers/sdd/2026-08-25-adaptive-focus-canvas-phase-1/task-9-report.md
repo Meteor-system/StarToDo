@@ -20,7 +20,7 @@ Status: implemented, verified, independently reviewed, controller follow-up fixe
 - Kept phase, timer, selected task context, primary control, return, context, and enter/exit immersive controls resident. Moved task selector, cycle/today metrics, next phase, and settings into the single local-scroll drawer.
 - Implemented the exact prompt copy and controls, conservative initial focus, Tab/Shift+Tab containment, Escape cancellation with propagation stopped, and practical focus restoration.
 - Changed `runPomodoroCommand` to `Promise<boolean>` with success only after command plus successful authoritative refresh; unavailable, busy, error, stale/failed refresh paths return false.
-- Added pending-start generation and session identity checks to prevent stale prompt input from double-starting after a newer accepted Pomodoro view.
+- Added pending-start session-transition epoch and current-session identity checks so harmless same-session refresh does not invalidate the prompt, while an accepted session identity transition prevents stale input from double-starting.
 - Implemented browser visual fallback, Tauri system immersive, Tauri-entry fallback warning, serialized exit, system-exit failure retention, page/Escape exit, task-scene exit coordination, and no implicit immersive behavior for floating intents or pause/resume.
 - Added the diagnostics auto-immersive selector using the existing typed preference authority and page-owned state/localStorage callback.
 - Removed all FocusMiniBar compact props/branches/CSS. The task title is hidden only by CSS below 560px height.
@@ -75,7 +75,7 @@ Independent review found no Critical issues. It found three actionable Important
 
 Fixes applied:
 
-- Added pending-start generation plus current-session identity validation so a refresh or external session transition makes an old prompt input ineligible to start.
+- Added pending-start session-transition epoch plus current-session identity validation so harmless same-session refresh preserves the prompt, while an external session identity transition makes old input ineligible to start.
 - Added `stopPropagation()` to prompt Escape so the child modal owns the event and does not also exit an underlying immersive display.
 - Serialized immersive exit calls with one in-flight promise and made task-scene navigation await that flight; failed system exit keeps the focus scene and immersive state.
 - Re-ran `npm run check` and the five focused immersive/layout E2Es after fixes; all passed.
