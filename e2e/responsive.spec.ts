@@ -145,6 +145,7 @@ test('floating route renders an expanded idle companion', async ({
   });
   expect(measurements.localBody).not.toBeNull();
   expect(measurements.localBody?.overflowY).toBe('auto');
+  expect(browserErrors.get(page) ?? []).toEqual([]);
   console.log(`floating measurements 360x260 ${JSON.stringify(measurements)}`);
 });
 

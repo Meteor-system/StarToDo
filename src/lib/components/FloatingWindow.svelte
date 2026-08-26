@@ -74,6 +74,7 @@
   let requestedSizeMode: FloatingSizeMode | null = null;
   let sizeCommandRunning = false;
   let sizeFlushQueued = false;
+  let floatingPreferencesReady = false;
   let previousHtmlMinWidth: string | undefined;
   let previousHtmlOverflow: string | undefined;
   let previousBodyMinWidth: string | undefined;
@@ -239,7 +240,7 @@
   function requestSizeSync(mode: FloatingSizeMode): void {
     if (!isTauriRuntime()) return;
     requestedSizeMode = mode;
-    if (sizeCommandRunning || sizeFlushQueued) return;
+    if (!floatingPreferencesReady || sizeCommandRunning || sizeFlushQueued) return;
     sizeFlushQueued = true;
     queueMicrotask(() => {
       sizeFlushQueued = false;
@@ -248,7 +249,7 @@
   }
 
   async function flushSizeSync(): Promise<void> {
-    if (sizeCommandRunning || disposed || !isTauriRuntime()) return;
+    if (!floatingPreferencesReady || sizeCommandRunning || disposed || !isTauriRuntime()) return;
     sizeCommandRunning = true;
     try {
       while (!disposed) {
@@ -278,9 +279,8 @@
   }
 
   function expandFromCapsule(): void {
-    const at = Date.now();
-    dispatchFloating({ type: 'pointer-enter', at });
-    dispatchFloating({ type: 'pointer-leave', at });
+    if (!root.matches(':focus-within')) return;
+    dispatchFloating({ type: 'focus-in', at: Date.now() });
   }
 
   function handleFocusOut(event: FocusEvent): void {
@@ -308,13 +308,17 @@
     void (async () => {
       try {
         const next = await getFloatingWindowPreferences();
+        if (disposed) return;
+        floatingPreferences = next;
+        lastSentSizeMode = next.displayMode;
+      } catch (error) {
+        if (disposed) return;
+        sizeWarning = `悬浮窗偏好读取失败：${errorMessage(error)}`;
+      } finally {
         if (!disposed) {
-          floatingPreferences = next;
-          lastSentSizeMode = next.displayMode;
+          floatingPreferencesReady = true;
           requestSizeSync(floatingSizeMode(display.mode));
         }
-      } catch (error) {
-        if (!disposed) sizeWarning = `悬浮窗偏好读取失败：${errorMessage(error)}`;
       }
     })();
 
@@ -372,7 +376,7 @@
         {remainingLabel}
         {taskTitle}
         paused={statusLabel === '已暂停'}
-        busy={pomodoroBusy || primaryAction === 'none'}
+        busy={pomodoroBusy || primaryAction === 'none' || !tauriAvailable}
         onOpenFocus={() => void openFocus()}
         onPrimary={handlePrimaryAction}
         onExpand={expandFromCapsule}

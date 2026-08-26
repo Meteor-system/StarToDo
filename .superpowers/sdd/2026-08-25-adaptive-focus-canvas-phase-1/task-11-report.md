@@ -118,3 +118,19 @@ Independent review found no Critical issues. Three Important issues were fixed b
 
 - The browser preview has no task-fixture injection, so the E2E proves the local body scroll contract (`overflow-y:auto`) but cannot create six visible tasks to prove actual `scrollHeight > clientHeight`, five residents, and the remainder label. Those behaviors are statically explicit in `slice(0, 5)` and the conditional remainder.
 - The active 340x64 capsule cannot be reached in browser-only E2E because browser preview has no backend Pomodoro snapshot injection. Its exact resident set and fit constraints were audited statically; a Windows/Tauri smoke test should exercise the live active-session capsule.
+
+## Follow-up static notes
+
+A controller follow-up was incorporated before final handoff:
+
+- Capsule primary `busy` now includes `!tauriAvailable`, matching the expanded panel.
+- Capsule expand no longer synthesizes pointer state. It only reaffirms `focus-in` when the root actually matches `:focus-within`; real pointer/focus root events remain authoritative.
+- Desktop size requests queue while `getFloatingWindowPreferences` is unresolved. The current preference response establishes `floatingPreferences` and `lastSentSizeMode`, then marks sizing ready and drains the latest requested display mode. A failed preference read warns, marks ready, and drains without a browser invoke.
+- The exact floating E2E preserves its prescribed assertions and explicitly asserts the test-local console/pageerror collection is empty, in addition to the suite afterEach assertion.
+
+Additional rulings:
+
+- `Ruling: disable both capsule and expanded primary controls whenever tauriAvailable is false — unavailable native mutations must not appear actionable — cost if wrong: misleading browser/unavailable UI.`
+- `Ruling: let real root pointer/focus events drive expansion and make onExpand conditional on actual focus-within — reducer input must reflect DOM truth — cost if wrong: stranded focusInside or synthetic interaction state.`
+- `Ruling: make the initial preference read a barrier before native size drain — the read establishes the authoritative current mode before queued requests execute — cost if wrong: an older read response can overwrite newer command preferences or lastSent state.`
+- `Ruling: assert browser errors inside the exact floating test as well as afterEach — the required case carries direct no-error evidence — cost if wrong: failures remain only indirectly attributed during teardown.`
