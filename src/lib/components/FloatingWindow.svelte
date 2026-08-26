@@ -33,6 +33,7 @@
   } from '$lib/floating-coordinator';
   import {
     abandonFloatingResetReconciliation,
+    acceptFloatingPreferencesObservation,
     acceptFloatingPreferencesRead,
     acceptFloatingReconciliation,
     acceptFloatingResetFailure,
@@ -90,6 +91,7 @@
 
   let unlistenTasks: (() => void) | undefined;
   let unlistenPomodoro: (() => void) | undefined;
+  let unlistenFloatingPreferences: (() => void) | undefined;
   let runtimeInitialized = false;
   let clockTimer: ReturnType<typeof window.setInterval> | undefined;
   let tasksTimer: ReturnType<typeof window.setInterval> | undefined;
@@ -425,6 +427,15 @@
       }
 
       try {
+        const unlisten = await listen<FloatingWindowPreferences>('floating-window-preferences-changed', (event) => {
+          if (!disposed) sizeSync = acceptFloatingPreferencesObservation(sizeSync, event.payload);
+        });
+        if (disposed) unlisten(); else unlistenFloatingPreferences = unlisten;
+      } catch (error) {
+        if (!disposed) sizeWarning = `悬浮窗尺寸监听失败：${errorMessage(error)}`;
+      }
+
+      try {
         const unlisten = await listen('pomodoro-state-changed', () => { if (!disposed) void refreshPomodoro(); });
         if (disposed) unlisten(); else unlistenPomodoro = unlisten;
       } catch (error) {
@@ -472,6 +483,7 @@
     if (collapseTimer !== undefined) window.clearTimeout(collapseTimer);
     unlistenTasks?.();
     unlistenPomodoro?.();
+    unlistenFloatingPreferences?.();
     if (previousHtmlMinWidth !== undefined) document.documentElement.style.minWidth = previousHtmlMinWidth;
     if (previousHtmlOverflow !== undefined) document.documentElement.style.overflow = previousHtmlOverflow;
     if (previousBodyMinWidth !== undefined) document.body.style.minWidth = previousBodyMinWidth;

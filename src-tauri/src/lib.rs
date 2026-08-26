@@ -1683,13 +1683,20 @@ fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
                     };
                     classify_floating_resize(&mut runtime, actual, now_unix_ms())
                 };
-                let _ = update_floating_window_preferences(&app_for_events, |preferences| {
-                    preferences.width = f64::from(actual.0);
-                    preferences.height = f64::from(actual.1);
+                if let Ok(preferences) =
+                    update_floating_window_preferences(&app_for_events, |preferences| {
+                        preferences.width = f64::from(actual.0);
+                        preferences.height = f64::from(actual.1);
+                        if user_resized {
+                            preferences.user_resized = true;
+                        }
+                    })
+                {
                     if user_resized {
-                        preferences.user_resized = true;
+                        let _ =
+                            app_for_events.emit("floating-window-preferences-changed", preferences);
                     }
-                });
+                }
             }
             _ => {}
         }

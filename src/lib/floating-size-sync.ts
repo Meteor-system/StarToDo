@@ -149,6 +149,20 @@ export function acceptFloatingPreferencesRead<T extends { displayMode: FloatingS
   };
 }
 
+export function acceptFloatingPreferencesObservation<T>(
+  state: FloatingSizeSyncState<T>,
+  preferences: T
+): FloatingSizeSyncState<T> {
+  if (
+    !state.ready ||
+    state.inFlight !== null ||
+    state.resetDesired !== null ||
+    state.resetInFlight !== null ||
+    (state.desired !== null && state.appliedGeneration < state.desired.generation)
+  ) return state;
+  return { ...state, preferences };
+}
+
 export function acceptFloatingReconciliation<T>(
   state: FloatingSizeSyncState<T>,
   request: FloatingSizeRequest,

@@ -154,7 +154,20 @@ async function installActiveFloatingTauriMock(page: Page): Promise<void> {
             preferences.displayMode = args.mode as 'capsule' | 'expanded';
             return { ...preferences };
           }
-          if (command === 'plugin:event|listen') return 1;
+          if (command === 'reset_floating_auto_size') {
+            preferences.width = preferences.displayMode === 'capsule' ? 340 : 360;
+            preferences.height = preferences.displayMode === 'capsule' ? 64 : 260;
+            preferences.userResized = false;
+            return { ...preferences };
+          }
+          if (command === 'plugin:event|listen') {
+            const eventName = args.event as string;
+            const handler = callbacks.get(args.handler as number);
+            if (eventName === 'floating-window-preferences-changed' && handler) {
+              window.addEventListener(eventName, (event) => handler({ event: eventName, id: 1, payload: (event as CustomEvent).detail }));
+            }
+            return 1;
+          }
           if (command === 'plugin:event|unlisten') return null;
           if (command === 'open_focus_from_floating' || command === 'hide_floating_window') return null;
           throw new Error(`Unexpected mocked Tauri command: ${command}`);
@@ -163,6 +176,29 @@ async function installActiveFloatingTauriMock(page: Page): Promise<void> {
     });
   });
 }
+
+test('shows and clears manual resize ownership without recreating the floating page', async ({ page }) => {
+  await installActiveFloatingTauriMock(page);
+  await page.setViewportSize({ width: 360, height: 260 });
+  await page.goto('/?window=floating');
+  await page.getByRole('button', { name: '展开悬浮窗' }).evaluate((button: HTMLElement) => button.click());
+
+  const reset = page.getByRole('button', { name: '恢复自动尺寸' });
+  await expect(reset).not.toBeAttached();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('floating-window-preferences-changed', {
+      detail: { visible: true, x: null, y: null, width: 480, height: 350, alwaysOnTop: true, userResized: true, displayMode: 'expanded' }
+    }));
+  });
+  await expect(reset).toBeVisible();
+
+  await reset.click();
+  await expect(reset).not.toBeAttached();
+  await expect.poll(() => page.evaluate(async () => {
+    const preferences = await (window as Window & { __TAURI_INTERNALS__: { invoke: (command: string) => Promise<{ width: number; height: number; userResized: boolean }> } }).__TAURI_INTERNALS__.invoke('get_floating_window_preferences');
+    return { width: preferences.width, height: preferences.height, userResized: preferences.userResized };
+  })).toEqual({ width: 360, height: 260, userResized: false });
+});
 
 test('active capsule preserves logical focus while expanding', async ({ page }) => {
   await installActiveFloatingTauriMock(page);

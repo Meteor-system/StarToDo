@@ -75,6 +75,14 @@
 - Minimal fix: mounted floating route listens to `window.blur`, clears `pendingFocusRestore`, increments `focusRestoreSequence` to invalidate an in-flight restoration, and dispatches the existing reducer `focus-out` event at `Date.now()`. Destroy unregisters the listener and invalidates restoration. Pointer ownership and reducer interaction/leave deadlines are unchanged.
 - Gates: full Playwright 32/32 in 18.5 s; units 9 files/85 tests; frontend check 0 errors/0 warnings. Actual two-WebView controller retest remains pending; no native GREEN is claimed for this fourth finding.
 
+## Fifth native Important — live manual-resize ownership
+
+- Controller native RED: active expanded floating started at 360 x 260; a genuine Win32 bottom-right drag produced inner 480 x 350. Backend `get_floating_window_preferences` became width=480,height=350,userResized=true and later display-mode sync preserved that size, but mounted `sizeSync.preferences` retained initialization userResized=false. `恢复自动尺寸` timed out after 30 seconds and appeared only after WebView reload.
+- Root cause: Rust resize tracking persisted every resize but published no authoritative observation. The frontend had no resize/preference listener, so backend manual ownership and live UI state diverged.
+- TDD: mounted E2E valid RED exited 1 because an authoritative manual-resize update did not render the reset button. Size-sync policy valid RED was one TypeError for missing `acceptFloatingPreferencesObservation`. GREEN starts with no reset button, delivers 480 x 350/userResized=true in the same page, observes the button, invokes reset, then proves expanded 360 x 260/userResized=false and button disappearance. Focused E2E 1/1 in 8.6 s; policy 18/18.
+- Minimal bounded path: backend emits `floating-window-preferences-changed` only when `classify_floating_resize` says the native event is genuinely user-owned; programmatic auto-size events remain silent and cannot claim ownership. Frontend feeds payloads through a size-sync observation reducer that rejects them while any set/reset intent or generation is pending, preserving Task 11 ABA/stale-response invariants.
+- Gates: Playwright 33/33 in 19.2 s; frontend units 9 files/86 tests; check 0 errors/0 warnings; Rust fmt-check passed and Rust 86/86 + 0 + 0 passed after rebuilding the known ignored sidecar substrate. Initial Rust attempt is not product RED: fmt-check found the new formatting diff and Cargo build script stopped because the ignored notification-host publish executable was absent. Controller native drag/reset retest remains pending.
+
 ## Windows smoke
 
 - Environment observed: Windows 11 Pro 10.0.26200 build 26200, 64-bit; one active 2560 x 1440 AOC display at 180 Hz and 100%/96 DPI; NVIDIA RTX 3060.
@@ -100,6 +108,7 @@
 - Ruling: Test the exit decision as a pure code policy and leave same-PID recreation to isolated native smoke — Tauri runner APIs are integration boundaries and process identity cannot be proven by a unit test — cost if wrong: unit GREEN may not reflect a platform-specific event variant, hence controller native GREEN remains mandatory.
 - Ruling: Key Pomodoro toast dismissal by the complete warning value — current warning sources expose meaningful string changes but no independent warning epoch, and message-specific identity dismisses only the observed warning — cost if wrong: an identical later warning is intentionally still considered the same current warning and remains dismissed until its value changes away and back through future state-model work.
 - Ruling: Treat floating `window.blur` as loss of keyboard focus ownership while preserving pointer state — native WebView deactivation can retain DOM activeElement, and the reducer already combines independent pointer/focus ownership — cost if wrong: an unusual transient blur while the pointer remains outside arms the standard 700 ms bounded collapse, while pointer-inside still prevents collapse.
+- Ruling: Emit preference observations only for backend-classified manual resize and accept them only while size-sync is quiescent — why: classification already distinguishes programmatic targets, while quiescence prevents external observations from overwriting newer semantic generations — cost if wrong: a manual drag concurrent with an active set/reset is conservatively ignored live until a later authoritative read/recreation instead of corrupting newer intent.
 
 ## Deferred Minors and blockers
 

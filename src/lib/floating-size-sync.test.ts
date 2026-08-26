@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  acceptFloatingPreferencesObservation,
   acceptFloatingPreferencesRead,
   acceptFloatingReconciliation,
   acceptFloatingSizeFailure,
@@ -254,6 +255,16 @@ describe('floating size sync coordination', () => {
 
     expect(sync.preferences).toEqual(prefs('expanded', 380, true));
     expect(nextFloatingSizeRequest(sync)).toMatchObject({ mode: 'capsule' });
+  });
+
+  it('accepts an authoritative external observation only when no semantic request is pending', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('expanded', 360));
+    sync = acceptFloatingPreferencesObservation(sync, prefs('expanded', 480, true));
+    expect(sync.preferences).toEqual(prefs('expanded', 480, true));
+
+    sync = requestFloatingReset(sync);
+    sync = acceptFloatingPreferencesObservation(sync, prefs('expanded', 520, true));
+    expect(sync.preferences).toEqual(prefs('expanded', 480, true));
   });
 
   it('accepts preferences only for the latest semantic request generation', () => {
