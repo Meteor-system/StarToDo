@@ -1501,6 +1501,28 @@ fn save_window_preferences_to_disk(
     fs::write(path, content).map_err(string_error)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainWindowPlacementStep {
+    Unmaximize,
+    SetNormalSize,
+    SetNormalPosition,
+    Maximize,
+    LeaveNormal,
+}
+
+fn main_window_placement_plan(maximized: bool) -> [MainWindowPlacementStep; 4] {
+    [
+        MainWindowPlacementStep::Unmaximize,
+        MainWindowPlacementStep::SetNormalSize,
+        MainWindowPlacementStep::SetNormalPosition,
+        if maximized {
+            MainWindowPlacementStep::Maximize
+        } else {
+            MainWindowPlacementStep::LeaveNormal
+        },
+    ]
+}
+
 fn apply_window_preferences(
     window: &WebviewWindow,
     preferences: &WindowPreferences,
@@ -1514,20 +1536,32 @@ fn apply_window_preferences(
         .set_always_on_top(preferences.always_on_top)
         .map_err(string_error)?;
     window.set_fullscreen(false).map_err(string_error)?;
-    if preferences.maximized {
-        window.maximize().map_err(string_error)?;
-    } else {
-        window.unmaximize().map_err(string_error)?;
-        window
-            .set_size(LogicalSize::new(
-                preferences.normal_bounds.width,
-                preferences.normal_bounds.height,
-            ))
-            .map_err(string_error)?;
-        if let (Some(x), Some(y)) = (preferences.normal_bounds.x, preferences.normal_bounds.y) {
-            window
-                .set_position(LogicalPosition::new(x as f64, y as f64))
-                .map_err(string_error)?;
+    for step in main_window_placement_plan(preferences.maximized) {
+        match step {
+            MainWindowPlacementStep::Unmaximize => {
+                window.unmaximize().map_err(string_error)?;
+            }
+            MainWindowPlacementStep::SetNormalSize => {
+                window
+                    .set_size(LogicalSize::new(
+                        preferences.normal_bounds.width,
+                        preferences.normal_bounds.height,
+                    ))
+                    .map_err(string_error)?;
+            }
+            MainWindowPlacementStep::SetNormalPosition => {
+                if let (Some(x), Some(y)) =
+                    (preferences.normal_bounds.x, preferences.normal_bounds.y)
+                {
+                    window
+                        .set_position(LogicalPosition::new(x as f64, y as f64))
+                        .map_err(string_error)?;
+                }
+            }
+            MainWindowPlacementStep::Maximize => {
+                window.maximize().map_err(string_error)?;
+            }
+            MainWindowPlacementStep::LeaveNormal => {}
         }
     }
     Ok(())
@@ -1815,13 +1849,13 @@ fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
             .build()
             .map_err(string_error)?;
         install_close_to_tray_behavior(&window);
-        install_main_window_tracking(app, &window);
     }
 
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window was not created".to_string())?;
     apply_window_preferences(&window, &preferences)?;
+    install_main_window_tracking(app, &window);
     show_existing_window(&window)
 }
 
@@ -3672,6 +3706,28 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maximized_startup_seeds_normal_placement_before_final_maximize() {
+        assert_eq!(
+            main_window_placement_plan(true),
+            [
+                MainWindowPlacementStep::Unmaximize,
+                MainWindowPlacementStep::SetNormalSize,
+                MainWindowPlacementStep::SetNormalPosition,
+                MainWindowPlacementStep::Maximize,
+            ]
+        );
+        assert_eq!(
+            main_window_placement_plan(false),
+            [
+                MainWindowPlacementStep::Unmaximize,
+                MainWindowPlacementStep::SetNormalSize,
+                MainWindowPlacementStep::SetNormalPosition,
+                MainWindowPlacementStep::LeaveNormal,
+            ]
+        );
+    }
 
     #[test]
     fn floating_display_modes_have_recommended_sizes() {

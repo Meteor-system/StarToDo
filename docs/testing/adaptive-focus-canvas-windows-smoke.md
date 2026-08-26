@@ -13,7 +13,7 @@
 ## Main window
 
 - [ ] First launch opens maximized inside the Windows work area and keeps the taskbar visible. Blocker: native launch was unsafe because startup calls `register_all` for the live `startodo:` scheme and the exact installed/user-data isolation boundary was not guaranteed; static config only shows `maximized: true`.
-- [ ] Restored normal window cannot resize below 520 x 420. Blocker: no isolated native launch; static config shows `minWidth: 520` and `minHeight: 420`, but that is not runtime smoke evidence.
+- [ ] Restored normal window cannot resize below 520 x 420. Blocker: controller isolated-native RED used disposable identifier `com.aidotnet.startodo.adaptivefocuscanvas.smoke20260827` with notification hosts disabled and isolated DB, but exposed a restore defect: default preferences were 960 x 680/maximized while real unmaximize stayed 2560 x 1369 with outer 2576 x 1408 at x=286,y=286 and persisted that corrupted normal bound. A source fix now seeds normal placement before final maximize, but this row remains unchecked until the controller rebuilds and reruns the real isolated binary.
 - [x] The UI remains usable at 520 x 420. Observed evidence: Chromium E2E at 520 x 420 kept task and focus document width/height at 520 x 420, opened the planner drawer, exercised its visible local tabpanel, restored settings-trigger focus after Escape, and displayed the focus timer with no browser errors.
 - [ ] Normal size and position survive hide-to-tray, show, UI release/rebuild, and process restart. Blocker: requires a native process and persisted window preferences; live user data was protected.
 - [ ] Legacy compact preferences migrate without recreating compact mode. Blocker: Rust tests cover migration, but no isolated native legacy preference directory was launched.
@@ -75,6 +75,12 @@
 - [ ] Pomodoro notification activation works. Blocker: notification registration and native SQLite state could not be mutated safely.
 - [ ] Installed-app protocol activation works. Blocker: the real `startodo:` command points to `D:\Code\Rust\StarToDo\src-tauri\target\debug\startodo.exe`; launching it would be outside this worktree and could mutate real user data/registration.
 - [ ] Uninstall removes the app and protocol registration cleanly. Blocker: no disposable Windows Sandbox/VM exists, and uninstalling the real installation is explicitly prohibited.
+
+## Isolated native fix pending validation
+
+- Controller safety evidence: debug build used disposable identifier `com.aidotnet.startodo.adaptivefocuscanvas.smoke20260827`, both generated notification hosts were disabled, runtime database path was verified under the disposable identifier before interaction, the installed app/real data were untouched, and the live protocol registration was backed up for exact restoration.
+- Native RED: first launch reported preferences `normalBounds=960x680`, `maximized=true`; actual maximized inner size was 2560 x 1369, `fullscreen=false`, with 2560 x 1392 work area/taskbar visible. Real `set_main_window_maximized(false)` plus 500 ms returned `maximized=false`, but actual inner remained 2560 x 1369 and outer became 2576 x 1408 at x=286,y=286; tracking then persisted this monitor-sized off-screen normal bound.
+- Root cause/fix state: maximized startup previously skipped applying stored/default normal size and position, so Windows had no restore placement before maximize and later unmaximize exposed/persisted the maximized-sized placement. The pending source fix applies `unmaximize -> normal size -> normal position -> final maximize` before tracking is installed, including UI rebuild ordering. Rust placement-plan regression and implementation gates pass; native GREEN is explicitly pending the controller’s isolated rebuild/rerun.
 
 ## Read-only native and installer observations
 

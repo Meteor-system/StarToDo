@@ -45,6 +45,15 @@
 - Installer: `D:\Code\Rust\StarToDo-adaptive-focus-canvas-phase1\src-tauri\target\release\bundle\nsis\StarToDo_0.1.2_x64-setup.exe`; 29,096,631 bytes; SHA-256 `20C49C298CFD826A640985EEBEFC01C1E44874E15E27A89DB0DCD7F3034FCD77`; Authenticode status `NotSigned`.
 - The installer was inspected read-only and was not launched. No installer or generated artifact is staged or intended for commit.
 
+## Native smoke Important — pending controller GREEN
+
+- Controller isolation/safety: debug build used disposable identifier `com.aidotnet.startodo.adaptivefocuscanvas.smoke20260827`; both generated notification hosts were disabled; runtime DB path was verified below that identifier before interaction; installed app and real data stayed untouched; live protocol registration was backed up for exact restoration.
+- Exact native RED: preferences reported `normalBounds=960x680`, `maximized=true`; actual maximized inner was 2560 x 1369, `fullscreen=false`, in a 2560 x 1392 work area with taskbar visible. After real `set_main_window_maximized(false)` and 500 ms, command state was `maximized=false` but actual inner remained 2560 x 1369, outer was 2576 x 1408 at x=286,y=286, and tracking persisted that corrupt monitor-sized normal bound.
+- Root cause: `apply_window_preferences` seeded normal size/position only when `preferences.maximized` was false. A config-created maximized window therefore never received stored/default restore placement; Windows unmaximize reused maximized-sized placement, and geometry tracking treated it as normal.
+- TDD RED substrate: first focused Rust attempt exited 1 before compile because ignored notification-host publish input was absent; after rebuilding that required substrate, valid RED exited 1 with E0425/E0433 for missing `main_window_placement_plan` and `MainWindowPlacementStep` (10 errors).
+- Implementation/pure GREEN: startup placement is now planned as `Unmaximize -> SetNormalSize -> SetNormalPosition -> Maximize` for maximized preference and the same first three steps followed by `LeaveNormal` otherwise. Geometry tracking is installed only after preference application in both initial setup and UI rebuild, so intermediate placement events are not persisted. Focused Rust passed 1/1; full Rust passed 85/85 plus 0 main/0 docs; fmt-check passed; frontend check reported 0 errors/0 warnings.
+- Native status: not GREEN. The source commit requires controller rebuild and rerun of the real isolated binary. No restored-normal, restart, or geometry smoke row is checked from pure/unit evidence.
+
 ## Windows smoke
 
 - Environment observed: Windows 11 Pro 10.0.26200 build 26200, 64-bit; one active 2560 x 1440 AOC display at 180 Hz and 100%/96 DPI; NVIDIA RTX 3060.
@@ -64,6 +73,8 @@
 - Ruling: Preserve the failing exact NSIS command as required evidence and use the additional npm-forwarding form only to test the actual installer build — the first failure occurs before Cargo build due to CLI parsing — cost if wrong: downstream automation that uses the exact script spelling remains broken and must be corrected outside this task.
 - Ruling: Mark fullscreen-command failure unchecked rather than build a broad main-window Tauri mock during this fix round — runtime absence bypasses the rejection path, and a faithful Pomodoro/Tauri integration would require substantially more command authority than the focused floating fixture — cost if wrong: rejection fallback remains without executable browser integration and must be verified in later safe native or dedicated integration work.
 - Ruling: A genuine outside focus target is required to prove focus-out; `body.focus()` is not sufficient when body is not focusable — the browser’s active element is asserted outside the floating region before advancing the leave buffer — cost if wrong: unusual browser focus behavior could still require a dedicated focusable page fixture, but Chromium evidence is deterministic here.
+- Ruling: Seed normal placement while the configured window is still hidden, then apply final maximize before installing geometry tracking — this gives Windows a restore placement without allowing temporary unmaximize/resize/move events to overwrite preferences — cost if wrong: platform event delivery delayed beyond listener installation could still expose an intermediate event, which is why controller native rerun remains mandatory.
+- Ruling: Use an explicit pure placement plan as the smallest deterministic Rust regression — Tauri `WebviewWindow` is not cheaply mockable, while the ordered OS calls are the defect boundary — cost if wrong: the pure test cannot prove Windows honors the calls, so native GREEN is intentionally withheld.
 
 ## Deferred Minors and blockers
 
