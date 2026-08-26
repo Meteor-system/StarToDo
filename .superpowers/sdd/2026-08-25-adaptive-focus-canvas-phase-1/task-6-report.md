@@ -27,8 +27,10 @@ The brief's required RED test was already present in `e2e/preview.spec.ts` as `o
 - `npm run test:unit`: passed, 51/51 tests.
 - `$env:CI='1'; npm run test:e2e -- '--grep=task tools as contextual drawers|persistence|workspace'`: passed, 9/9 tests.
 - `$env:CI='1'; npm run test:e2e`: passed, 9/9 tests.
+- `$env:CI='1'; npm run test:e2e`: passed, 9/9 tests.
 - `git diff --check`: passed.
 - UTF-8/non-empty validation for all Task 6 outputs: passed.
+- Activation invariant audit: `focusActivation` uses local `[data-scroll-region="tasks"]` `scrollTo`; no `target.scrollIntoView` remains. TaskCanvas details callback is an intentional no-op placeholder until the details contract is introduced.
 - Final TaskScene legacy-symbol audit (`compact`, workspace-view aliases, `showTrash`, old `TaskItem` list): no matches.
 
 ## Staged-overlap paths/hunks

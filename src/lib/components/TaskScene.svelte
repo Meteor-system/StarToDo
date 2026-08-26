@@ -708,7 +708,10 @@
       return false;
     }
 
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const region = document.querySelector<HTMLElement>('[data-scroll-region="tasks"]');
+    if (region) {
+      region.scrollTo({ top: Math.max(0, target.offsetTop - region.clientHeight / 2), behavior: 'smooth' });
+    }
     document.getElementById(`task-action-${id}`)?.focus();
     announcement = message;
     lastFocusedActivationNonce = nonce;
@@ -823,7 +826,7 @@
   </div>
   <p class="sr-only" aria-live="polite">{announcement}</p>
   {#if !initialized}<p class="muted">正在初始化任务场景…</p>{:else if !tauriAvailable}<p class="notice" role="status">浏览器预览已禁用任务持久化；请在桌面应用中管理任务。</p>{:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>{:else if loading}<p class="muted">正在读取任务…</p>{:else}
-    <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={openPlannerTaskInList} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
+    <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={() => undefined} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
   {/if}
 </section>
 
@@ -844,7 +847,7 @@
 <ContextDrawer open={activeDrawer === 'filters'} drawerId="filters-drawer" title="筛选" onClose={closeTaskDrawer}><div class="filters" aria-label="任务筛选"><div class="execution-views" role="group" aria-label="执行视图">{#each [['inbox','收件箱'],['today','今日'],['overdue','逾期'],['upcoming','即将到来'],['all','全部']] as view}<button type="button" class:active={executionView === view[0]} aria-pressed={executionView === view[0]} onclick={() => executionView = view[0] as ExecutionView}>{view[1]}</button>{/each}</div><label>状态<select bind:value={statusFilter}><option value="all">全部</option><option value="active">进行中</option><option value="completed">已完成</option></select></label></div></ContextDrawer>
 <ContextDrawer open={activeDrawer === 'projects'} drawerId="projects-drawer" title="项目" onClose={closeTaskDrawer}><ProjectSidebar {projects} tasks={tasks} {selectedProject} disabled={loading || createBusy} onSelect={selectProject} onCreate={createProject} onRename={renameProject} onArchive={archiveProject} onRestore={restoreProject} /></ContextDrawer>
 <ContextDrawer open={activeDrawer === 'planner'} drawerId="planner-drawer" title="周计划" size="wide" onClose={closeTaskDrawer}><WeekPlanner tasks={plannerTasks} {projects} weekStart={plannerWeekStart} today={currentLocalDate} onWeekChange={setPlannerWeekStart} onReschedule={handlePlannerReschedule} onOpenTask={openPlannerTaskInList} /></ContextDrawer>
-<ContextDrawer open={activeDrawer === 'trash'} drawerId="trash-drawer" title="回收站" onClose={closeTaskDrawer}>{#if trashLoadError}<div class="load-error" role="alert"><span>回收站未能加载：{trashLoadError}</span><button onclick={() => void loadTrash()} disabled={trashLoading}>{trashLoading ? '重试中…' : '重试'}</button></div>{:else if trashLoading}<p class="muted">正在读取回收站…</p>{:else}<TaskCanvas activeTasks={[]} completedTasks={[]} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} trashMode={true} onOpenDetails={openPlannerTaskInList} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />{/if}</ContextDrawer>
+<ContextDrawer open={activeDrawer === 'trash'} drawerId="trash-drawer" title="回收站" onClose={closeTaskDrawer}>{#if trashLoadError}<div class="load-error" role="alert"><span>回收站未能加载：{trashLoadError}</span><button onclick={() => void loadTrash()} disabled={trashLoading}>{trashLoading ? '重试中…' : '重试'}</button></div>{:else if trashLoading}<p class="muted">正在读取回收站…</p>{:else}<TaskCanvas activeTasks={[]} completedTasks={[]} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} trashMode={true} onOpenDetails={() => undefined} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />{/if}</ContextDrawer>
 
 <style>
   .task-scene { height:100%; min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); container-type:inline-size; }
