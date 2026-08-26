@@ -4,6 +4,8 @@ import {
   acceptFloatingPreferencesRead,
   acceptFloatingReconciliation,
   acceptFloatingSizeFailure,
+  acceptFloatingResetFailure,
+  acceptFloatingResetReconciliation,
   acceptFloatingResetSuccess,
   acceptFloatingSizeSuccess,
   beginFloatingResetRequest,
@@ -138,6 +140,32 @@ describe('floating size sync coordination', () => {
     sync = beginFloatingResetRequest(sync, resetRequest);
     sync = acceptFloatingResetSuccess(sync, resetRequest, prefs('expanded', 380, false));
     expect(sync.preferences).toEqual(prefs('expanded', 380, false));
+    expect(sync.desired).toEqual({ mode: 'expanded', generation: resetRequest.generation });
+  });
+
+  it('rejects an older set reconciliation after reset intent exists', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340, true));
+    sync = requestFloatingSize(sync, 'expanded');
+    const setRequest = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, setRequest);
+    sync = acceptFloatingSizeFailure(sync, setRequest);
+    sync = requestFloatingReset(sync);
+
+    sync = acceptFloatingReconciliation(sync, setRequest, prefs('expanded', 380, true));
+
+    expect(sync.preferences).toEqual(prefs('capsule', 340, true));
+  });
+
+  it('accepts reset failure reconciliation without satisfying reset presentation', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('expanded', 380, true));
+    sync = requestFloatingReset(sync);
+    const resetRequest = nextFloatingResetRequest(sync)!;
+    sync = beginFloatingResetRequest(sync, resetRequest);
+    sync = acceptFloatingResetFailure(sync, resetRequest);
+    sync = acceptFloatingResetReconciliation(sync, resetRequest, prefs('expanded', 380, false));
+
+    expect(sync.preferences).toEqual(prefs('expanded', 380, false));
+    expect(sync.appliedGeneration).toBeLessThan(resetRequest.generation);
   });
 
   it('keeps reset authoritative when its completion precedes an obsolete set response', () => {

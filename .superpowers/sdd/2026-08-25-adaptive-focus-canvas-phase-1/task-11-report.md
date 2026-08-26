@@ -213,6 +213,20 @@ Executable browser coverage retains the real touchscreen tap and adds a standard
 - With `clock.pauseAt` immediately before activation, the deterministic test is stable: immediate interaction-expanded, still interaction-expanded at 4,999 ms, capsule exactly at 5,000 ms.
 - Stability check: 3/3 repeated runs passed.
 
+Controller reset acceptance follow-up RED:
+
+- `npx vitest run src/lib/floating-size-sync.test.ts`
+- 13 tests: 3 failed, 10 passed.
+- Failures proved: current reset success left desired at the old set generation; an old set reconciliation still overwrote preferences after reset intent; and reset-token reconciliation did not exist.
+
+Follow-up GREEN:
+
+- Size coordinator 13/13 passed.
+- Set reconciliation now requires both its desired generation and the global latest generation, so reset intent immediately invalidates any delayed old-set read.
+- `nextFloatingResetRequest` returns reset only after size `inFlight` clears, while `nextFloatingSizeRequest` remains blocked by reset pending/in-flight; the production drain uses both selectors and never starts reset concurrently with an older set.
+- Reset failure retains its reset token for one best-effort preferences read. Reset reconciliation accepts only that globally current reset token, observes authoritative `userResized`/dimensions without advancing presentation `appliedGeneration`, then clears reset intent. A failed reconciliation clears the intent without looping.
+- Current reset success rebases desired to the returned `displayMode` at reset generation, keeping desired/applied state coherent.
+
 Focused round-2 aggregate GREEN:
 
 - Task 11 pure tests: 3 files, 26/26 passed.
@@ -232,7 +246,7 @@ Final post-code evidence:
 - Direct focused reducer/coordinator files after model-gap fixes: 3 files, 23/23 tests passed.
 - `npm run check`: 0 errors, 0 warnings.
 - Direct focused Playwright (`active capsule|expanded idle companion`): 3/3 passed.
-- Full `npm run test:unit` after round 2: 9 files, 79/79 passed.
+- Full `npm run test:unit` after reset acceptance follow-up: 9 files, 81/81 passed.
 - Full Playwright after round 2: 24/24 passed.
 - `git diff --check`: exit 0; only Git line-ending notices.
 - Changed authorized source/test/report files: strict UTF-8 and nonempty.

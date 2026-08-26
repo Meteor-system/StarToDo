@@ -35,6 +35,7 @@
     acceptFloatingPreferencesRead,
     acceptFloatingReconciliation,
     acceptFloatingResetFailure,
+    acceptFloatingResetReconciliation,
     acceptFloatingResetSuccess,
     acceptFloatingSizeFailure,
     acceptFloatingSizeSuccess,
@@ -339,6 +340,14 @@
         sizeSync = acceptFloatingResetFailure(sizeSync, resetRequest);
         if (sizeSync.generation === resetRequest.generation) {
           sizeWarning = `恢复自动尺寸失败：${errorMessage(error)}`;
+        }
+        try {
+          const next = await getFloatingWindowPreferences();
+          if (!disposed) sizeSync = acceptFloatingResetReconciliation(sizeSync, resetRequest, next);
+        } catch {
+          if (sizeSync.resetDesired?.generation === resetRequest.generation) {
+            sizeSync = { ...sizeSync, resetDesired: null };
+          }
         }
       } finally {
         if (!disposed) void flushSizeSync();
