@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import type { ReminderReport } from '$lib/tasks';
+  import type { AutoImmersivePreference } from '$lib/ui-preferences';
   import { setAlwaysOnTop } from '$lib/windowing';
 
   type ActionKey = 'snapshot' | 'metrics' | 'database' | 'notifications' | 'testNotification' | 'scheduleNotification' | 'cancelNotification' | 'tray' | 'release' | 'alwaysOnTop' | 'reminderResync';
@@ -19,10 +20,12 @@
     latestReminderReport: ReminderReport | null;
     reminderSyncedAt: number | null;
     reminderWarningListenerToken: number | null;
+    autoImmersivePreference: AutoImmersivePreference;
+    onAutoImmersivePreferenceChange: (value: AutoImmersivePreference) => void;
     onReminderReconcile: () => Promise<ReminderReport>;
   }
 
-  let { tauriAvailable, uiRunId, initialAlwaysOnTop, activationId, activationError, initialSnapshot, latestReminderReport, reminderSyncedAt, reminderWarningListenerToken, onReminderReconcile }: Props = $props();
+  let { tauriAvailable, uiRunId, initialAlwaysOnTop, activationId, activationError, initialSnapshot, latestReminderReport, reminderSyncedAt, reminderWarningListenerToken, autoImmersivePreference, onAutoImmersivePreferenceChange, onReminderReconcile }: Props = $props();
   const emptyAction = (): ActionState => ({ busy: false, error: null, success: null });
   let alwaysOnTop = $state(false);
   let runtimeSnapshot = $state<JsonRecord | null>(null);
@@ -106,6 +109,23 @@
 <div class="diagnostics">
   <div class="content">
     <div class="overview"><div><span class="label">UI RUN</span><code>{uiRunId}</code></div></div>
+    <section class="panel preference-panel">
+      <div>
+        <h3>自动沉浸</h3>
+        <p>决定开始新的专注阶段时是否自动进入沉浸模式。</p>
+      </div>
+      <label>
+        <span class="sr-only">自动沉浸偏好</span>
+        <select
+          value={autoImmersivePreference}
+          onchange={(event) => onAutoImmersivePreferenceChange((event.currentTarget as HTMLSelectElement).value as AutoImmersivePreference)}
+        >
+          <option value="unset">下次询问</option>
+          <option value="enabled">自动进入</option>
+          <option value="disabled">保持窗口模式</option>
+        </select>
+      </label>
+    </section>
     <section class="panel"><div class="panel-heading"><h3>运行时快照</h3><button aria-label="刷新运行时快照" onclick={refreshSnapshot} disabled={actions.snapshot.busy}>{actions.snapshot.busy ? '读取中…' : '刷新'}</button></div>{#if entries(runtimeSnapshot).length}<dl>{#each entries(runtimeSnapshot) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>等待首次运行时快照。</p>{/if}{#if actions.snapshot.error}<p class="error" role="alert">{actions.snapshot.error}</p>{/if}</section>
     <div class="grid"><section class="panel"><div class="panel-heading"><h3>进程采样</h3><button onclick={sampleMetrics} disabled={actions.metrics.busy}>{actions.metrics.busy ? '采样中…' : '采样'}</button></div>{#if entries(metrics).length}<dl>{#each entries(metrics) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>读取当前进程指标。</p>{/if}{#if actions.metrics.error}<p class="error" role="alert">{actions.metrics.error}</p>{/if}</section>
       {#if true}<section class="panel"><div class="panel-heading"><h3>SQLite 探测</h3><button onclick={probeDatabase} disabled={actions.database.busy}>{actions.database.busy ? '探测中…' : '运行探测'}</button></div>{#if entries(database).length}<dl>{#each entries(database) as [key, value]}<div><dt>{key}</dt><dd>{format(value)}</dd></div>{/each}</dl>{:else}<p>验证数据库文件、连接与基础读写能力。</p>{/if}{#if actions.database.error}<p class="error" role="alert">{actions.database.error}</p>{/if}</section>
@@ -125,6 +145,9 @@
   .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
   .panel { padding:14px 0; border-bottom:1px solid var(--line); }
   .panel h3 { margin:0; color:var(--text-soft); font-size:12px; }
+  .preference-panel { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .preference-panel p { margin:5px 0 0; }
+  .preference-panel select { border:1px solid var(--line); border-radius:var(--radius-sm); padding:7px 9px; color:var(--text); background:var(--surface); }
   .panel p { line-height:1.5; }
   .panel dl { margin:10px 0 0; }
   .panel dl div { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.045); }

@@ -103,6 +103,31 @@ test('navigates between tasks and focus with keyboard-reachable, visibly focused
   await expect(page.getByRole('main', { name: '任务场景' })).toBeVisible();
 });
 
+test('shows a centered focus stage and exits visual immersive mode', async ({
+  page
+}) => {
+  await page.goto('/');
+
+  await page.getByRole('button', { name: '专注' }).click();
+  await expect(page.getByRole('timer')).toBeVisible();
+
+  await page.getByRole('button', {
+    name: '进入沉浸'
+  }).click();
+
+  await expect(page.locator('.app-shell')).toHaveAttribute(
+    'data-immersive',
+    'visual-fallback'
+  );
+
+  await page.keyboard.press('Escape');
+
+  await expect(page.locator('.app-shell')).toHaveAttribute(
+    'data-immersive',
+    'off'
+  );
+});
+
 test('does not horizontally overflow at 320px wide', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto('/');

@@ -2,6 +2,14 @@ import { expect, test, type Page } from '@playwright/test';
 
 const browserErrors = new WeakMap<Page, string[]>();
 
+interface FocusMeasurements {
+  viewport: { width: number; height: number };
+  document: { width: number; height: number };
+  canvas: { x: number; y: number; width: number; height: number };
+  stage: { x: number; y: number; width: number; height: number };
+  timer: { x: number; y: number; width: number; height: number };
+}
+
 interface PlannerMeasurements {
   viewport: { width: number; height: number };
   container: { width: number; height: number };
@@ -26,6 +34,35 @@ test.afterEach(async ({ page }, testInfo) => {
   });
   expect(errors, `Unexpected browser errors:\n${errors.join('\n')}`).toEqual([]);
 });
+
+async function openFocus(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.getByRole('button', { name: '专注' }).click();
+  await expect(page.getByRole('timer')).toBeVisible();
+}
+
+async function focusMeasurements(page: Page): Promise<FocusMeasurements> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>('.stage-canvas');
+    const stage = document.querySelector<HTMLElement>('[data-focus-stage]');
+    const timer = document.querySelector<HTMLElement>('[role="timer"]');
+    if (!canvas || !stage || !timer) throw new Error('Focus layout was not found');
+    const toRect = (element: HTMLElement) => {
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    };
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      document: {
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight
+      },
+      canvas: toRect(canvas),
+      stage: toRect(stage),
+      timer: toRect(timer)
+    };
+  });
+}
 
 async function openPlanner(page: Page): Promise<void> {
   await page.goto('/');
@@ -55,6 +92,54 @@ async function expectDocumentInsideViewport(page: Page): Promise<PlannerMeasurem
   expect(measurements.document.height).toBeLessThanOrEqual(measurements.viewport.height);
   return measurements;
 }
+
+for (const viewport of [
+  { width: 320, height: 720 },
+  { width: 520, height: 420 },
+  { width: 1180, height: 760 }
+]) {
+  test(`focus layout stays centered and resident at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await openFocus(page);
+
+    await expect(page.getByRole('button', { name: '返回任务' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '专注上下文' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '进入沉浸' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /开始/ })).toBeVisible();
+
+    const measurements = await focusMeasurements(page);
+    expect(measurements.document.width).toBeLessThanOrEqual(measurements.viewport.width);
+    expect(measurements.document.height).toBeLessThanOrEqual(measurements.viewport.height);
+
+    const canvasCenterX = measurements.canvas.x + measurements.canvas.width / 2;
+    const canvasCenterY = measurements.canvas.y + measurements.canvas.height / 2;
+    const timerCenterX = measurements.timer.x + measurements.timer.width / 2;
+    const timerCenterY = measurements.timer.y + measurements.timer.height / 2;
+    expect(Math.abs(timerCenterX - canvasCenterX)).toBeLessThanOrEqual(3);
+    expect(Math.abs(timerCenterY - canvasCenterY)).toBeLessThanOrEqual(Math.max(90, measurements.canvas.height * 0.24));
+    expect(measurements.stage.width).toBeLessThanOrEqual(measurements.canvas.width + 1);
+    expect(measurements.stage.height).toBeLessThanOrEqual(measurements.canvas.height + 1);
+
+    console.log(`focus measurements ${viewport.width}x${viewport.height} ${JSON.stringify(measurements)}`);
+    await testInfo.attach('focus-measurements', {
+      body: JSON.stringify(measurements),
+      contentType: 'application/json'
+    });
+  });
+}
+
+test.describe('focus reduced motion', () => {
+  test.use({ reducedMotion: 'reduce' });
+
+  test('focus layout remains compatible without breathing animation', async ({ page }) => {
+    await page.setViewportSize({ width: 520, height: 420 });
+    await openFocus(page);
+    await expect(page.locator('.focus-ring-core')).toHaveCSS('animation-name', 'none');
+    const measurements = await focusMeasurements(page);
+    expect(measurements.document.width).toBeLessThanOrEqual(measurements.viewport.width);
+    expect(measurements.document.height).toBeLessThanOrEqual(measurements.viewport.height);
+  });
+});
 
 test('planner stays inside a 520x420 viewport with a narrow selected-day surface', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 520, height: 420 });
