@@ -93,6 +93,61 @@ async function expectDocumentInsideViewport(page: Page): Promise<PlannerMeasurem
   return measurements;
 }
 
+test('floating route renders an expanded idle companion', async ({
+  page
+}) => {
+  await page.setViewportSize({
+    width: 360,
+    height: 260
+  });
+  await page.goto('/?window=floating');
+
+  const floating = page.getByRole('region', {
+    name: 'StarToDo 悬浮窗'
+  });
+
+  await expect(floating).toHaveAttribute(
+    'data-display-mode',
+    'expanded'
+  );
+  await expect(
+    page.getByRole('button', {
+      name: '打开专注工作区'
+    })
+  ).toBeVisible();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+            window.innerWidth &&
+          document.documentElement.scrollHeight <=
+            window.innerHeight
+      )
+    )
+    .toBe(true);
+
+  const measurements = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>('.content-body');
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      document: {
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight
+      },
+      localBody: body ? {
+        clientHeight: body.clientHeight,
+        scrollHeight: body.scrollHeight,
+        overflowY: getComputedStyle(body).overflowY
+      } : null
+    };
+  });
+  expect(measurements.localBody).not.toBeNull();
+  expect(measurements.localBody?.overflowY).toBe('auto');
+  console.log(`floating measurements 360x260 ${JSON.stringify(measurements)}`);
+});
+
 for (const viewport of [
   { width: 320, height: 720 },
   { width: 520, height: 420 },
