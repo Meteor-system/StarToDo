@@ -94,6 +94,8 @@ GREEN:
 - Initial coordinator GREEN was 3/3.
 - Follow-up RED: the stale-command test expected notification warning `notify` while preserving the newer read snapshot; 1/3 failed because the warning remained null.
 - Follow-up GREEN: 3/3 passed. A stale command result cannot replace the newer authority snapshot, but its independently relevant notification warning is preserved.
+- Final race RED: the stale-command test imported `pomodoroSnapshotAccepted`; 1/3 failed because the predicate did not exist. Warning preservation had made helper object identity unsuitable as proof of snapshot acceptance.
+- Final race GREEN: 3/3 passed. The component captures token/epoch acceptance before applying the helper and calls `applyAcceptedSnapshot` only when that explicit predicate is true.
 - A single monotonic epoch covers reads and mutations: the newer start wins for snapshots.
 - Command snapshots are accepted only while their token is current, then a fresh authority read starts.
 - Read/listener warnings, mutation failures, and notification warnings are separate; a successful read cannot erase a notification warning.
@@ -111,8 +113,10 @@ GREEN:
 - Initial size coordinator GREEN was 7/7.
 - Follow-up RED: the ambiguous-failure test imported the required reconciliation-specific acceptance API; 1/7 failed because `acceptFloatingReconciliation` did not exist.
 - Follow-up GREEN: 8/8 passed after adding reconciliation acceptance plus an obsolete-generation rejection test.
-- Reconciliation updates ready/preferences only for its still-current request generation and never advances presentation `appliedGeneration`; after an expanded/userResized/different-width reconciliation there is no immediate spin, while a later explicit retry yields the same-generation expanded request.
-- `requestSizeSync` creates a new generation only for a semantic mode change. An explicit same-mode event only clears the matching failed marker, avoiding redundant commands during ordinary focus/click interactions.
+- Final race RED: 2/8 failed because retry remained generation 1 rather than allocating a newer generation in both the direct failure and reconciled-failure scenarios.
+- Final race GREEN: 8/8 passed. A later explicit retry preserves the desired mode but allocates a new generation, so any still-pending reconciliation from the first attempt is rejected and cannot mark the retry presentation applied.
+- Reconciliation updates ready/preferences only for its still-current request generation and never advances presentation `appliedGeneration`; after an expanded/userResized/different-width reconciliation there is no immediate spin, while a later explicit retry yields a newer-generation expanded request.
+- `requestSizeSync` creates a new generation for semantic mode changes or a real failed-attempt retry. Ordinary explicit same-mode focus/click events create nothing when there is no matching failure.
 - Covers initial preference-read gate, gate failure drain, failure with no spin, explicit later same-mode retry, superseded failure, ambiguous-failure reconciliation, ABA response rejection, obsolete reconciliation rejection, and latest-generation preference acceptance.
 
 ABA timeline:

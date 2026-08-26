@@ -5,6 +5,7 @@ import {
   acceptPomodoroRead,
   beginPomodoroOperation,
   createPomodoroCoordinationState,
+  pomodoroSnapshotAccepted,
   type PomodoroCoordinationState
 } from './floating-coordinator';
 
@@ -25,6 +26,8 @@ describe('floating Pomodoro coordination', () => {
 
     expect(coordination.snapshot).toBe('read-newer');
     expect(coordination.notificationWarning).toBe('notify');
+    expect(pomodoroSnapshotAccepted(coordination, command.token)).toBe(false);
+    expect(pomodoroSnapshotAccepted(coordination, read.token)).toBe(true);
   });
 
   it('keeps notification warnings separate from successful read warnings', () => {

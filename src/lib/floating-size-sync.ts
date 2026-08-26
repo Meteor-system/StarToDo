@@ -117,5 +117,11 @@ export function retryFloatingSize<T>(
   state: FloatingSizeSyncState<T>
 ): FloatingSizeSyncState<T> {
   if (state.desired === null || state.failed?.generation !== state.desired.generation) return state;
-  return { ...state, failed: null };
+  const generation = state.generation + 1;
+  return {
+    ...state,
+    generation,
+    desired: { mode: state.desired.mode, generation },
+    failed: null
+  };
 }

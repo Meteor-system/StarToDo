@@ -54,7 +54,9 @@ describe('floating size sync coordination', () => {
 
     expect(nextFloatingSizeRequest(sync)).toBeNull();
     sync = retryFloatingSize(sync);
-    expect(nextFloatingSizeRequest(sync)).toMatchObject({ mode: 'expanded', generation: request.generation });
+    const retry = nextFloatingSizeRequest(sync)!;
+    expect(retry.mode).toBe('expanded');
+    expect(retry.generation).toBeGreaterThan(request.generation);
   });
 
   it('does not retry a superseded failed request', () => {
@@ -96,7 +98,13 @@ describe('floating size sync coordination', () => {
     expect(sync.preferences).toEqual(prefs('expanded', 380, true));
     expect(nextFloatingSizeRequest(sync)).toBeNull();
     sync = retryFloatingSize(sync);
-    expect(nextFloatingSizeRequest(sync)).toEqual(request);
+    const retry = nextFloatingSizeRequest(sync)!;
+    expect(retry.mode).toBe('expanded');
+    expect(retry.generation).toBeGreaterThan(request.generation);
+
+    sync = acceptFloatingReconciliation(sync, request, prefs('expanded', 420, false));
+    expect(sync.preferences).toEqual(prefs('expanded', 380, true));
+    expect(nextFloatingSizeRequest(sync)).toEqual(retry);
   });
 
   it('rejects reconciliation preferences from an obsolete generation', () => {

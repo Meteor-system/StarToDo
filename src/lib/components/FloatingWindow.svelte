@@ -28,7 +28,8 @@
     acceptPomodoroCommand,
     acceptPomodoroRead,
     beginPomodoroOperation,
-    createPomodoroCoordinationState
+    createPomodoroCoordinationState,
+    pomodoroSnapshotAccepted
   } from '$lib/floating-coordinator';
   import {
     acceptFloatingPreferencesRead,
@@ -222,14 +223,14 @@
     try {
       const result = await command();
       if (disposed) return;
-      const previous = pomodoroCoordination;
+      const snapshotAccepted = pomodoroSnapshotAccepted(pomodoroCoordination, operation.token);
       pomodoroCoordination = acceptPomodoroCommand(
-        previous,
+        pomodoroCoordination,
         operation.token,
         result.snapshot,
         result.notificationWarning ?? null
       );
-      if (pomodoroCoordination !== previous) applyAcceptedSnapshot(result.snapshot);
+      if (snapshotAccepted) applyAcceptedSnapshot(result.snapshot);
       void refreshPomodoro();
     } catch (error) {
       if (!disposed) mutationWarning = `专注操作失败：${errorMessage(error)}`;

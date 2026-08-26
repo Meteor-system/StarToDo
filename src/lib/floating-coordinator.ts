@@ -26,6 +26,13 @@ export function beginPomodoroOperation<T>(
   return { state: { ...state, epoch: token }, token };
 }
 
+export function pomodoroSnapshotAccepted<T>(
+  state: PomodoroCoordinationState<T>,
+  token: number
+): boolean {
+  return token === state.epoch;
+}
+
 export function acceptPomodoroRead<T>(
   state: PomodoroCoordinationState<T>,
   token: number,
