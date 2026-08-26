@@ -62,9 +62,9 @@ Deferred Minors: the Task 12 keyboard-matrix coverage above.
 
 ## Verification
 
-- Focused predicate GREEN: `npm run test:unit -- src/lib/task-interaction.test.ts` — 4/4 passed.
-- Strict diagnostics: `npm run check` — 0 errors, 0 warnings, rerun after the report consistency correction.
-- Full unit suite: `npm run test:unit` — 6 files passed, 55 tests passed.
+- Focused interaction GREEN: `npm run test:unit -- src/lib/task-interaction.test.ts` — 1 file passed, 7/7 tests passed after the ownership-wiring correction.
+- Strict diagnostics: `npm run check` — 0 errors, 0 warnings in the post-ownership-wiring rerun.
+- Full unit suite: `npm run test:unit` — 6 files passed, 58/58 tests passed after the ownership-wiring correction.
 - Focused static/behavior audit: PASS for exactly one details drawer, no TaskItem inline editor or normal-delete confirmation, row/nested-control keyboard boundary, current-token feedback placement, local task scrolling, and success-only drawer close.
 - `git diff --check` — exit 0; only Git line-ending conversion notices.
 - UTF-8/non-empty validation — passed for every implementation output. The report was validated again before staging.
