@@ -186,9 +186,23 @@ test('scrolling is confined to visible declared local regions at 520x420', async
     await expect(visibleRegions.nth(index)).toHaveCSS('overflow-y', /auto|scroll/);
   }
 
-  await localRegion.evaluate((region) => {
-    region.scrollTop = Math.min(1, Math.max(0, region.scrollHeight - region.clientHeight));
+  const localScroll = await localRegion.evaluate((region) => {
+    const overflowContent = document.createElement('div');
+    overflowContent.setAttribute('aria-hidden', 'true');
+    overflowContent.style.height = `${region.clientHeight + 1}px`;
+    overflowContent.style.flex = 'none';
+    region.append(overflowContent);
+    region.scrollTop = 1;
+    const measurements = {
+      clientHeight: region.clientHeight,
+      scrollHeight: region.scrollHeight,
+      scrollTop: region.scrollTop
+    };
+    overflowContent.remove();
+    return measurements;
   });
+  expect(localScroll.scrollHeight).toBeGreaterThan(localScroll.clientHeight);
+  expect(localScroll.scrollTop).toBeGreaterThan(0);
   expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? -1)).toBe(0);
 });
 

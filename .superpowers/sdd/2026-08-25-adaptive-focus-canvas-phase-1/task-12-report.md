@@ -11,7 +11,7 @@
 ## Implementation evidence
 
 - Added the binding task/focus viewport matrix: 320 x 720, 520 x 420, 760 x 560, 1180 x 760, and 1440 x 900. Every case asserts both document width and document height are at most the viewport, switches to focus, asserts the timer, and repeats both containment assertions. Existing stronger focus-stage geometry tests in `e2e/responsive.spec.ts` were retained unchanged.
-- Added 520 x 420 local-scroll evidence: opens the real planner drawer, requires its visible selected-bucket tabpanel, requires local `overflow-y: auto|scroll`, verifies document scroll top/left are exactly zero, audits every visible `[data-scroll-region]`, exercises the real local planner region, and confirms document scroll remains zero.
+- Added 520 x 420 local-scroll evidence: opens the real planner drawer, requires its visible selected-bucket tabpanel, requires local `overflow-y: auto|scroll`, verifies document scroll top/left are exactly zero, audits every visible `[data-scroll-region]`, temporarily appends inert overflow content inside that real production tabpanel, proves `scrollHeight > clientHeight` and `scrollTop > 0`, removes the content, and confirms document scroll remains zero.
 - Added reduced-motion + keyboard evidence: explicitly emulates reduced motion and proves the media query matches, focuses the settings trigger, opens the drawer, presses Escape, proves trigger focus restoration, switches to focus, and proves the timer is visible.
 - Existing per-test browser-error hooks remain binding for all added cases. Browser preview/Tauri fallback behavior was preserved.
 
@@ -22,6 +22,8 @@
 - Test-fixture RED 2: the same run exited 1 because describe-level `test.use({ reducedMotion: 'reduce' })` left `matchMedia('(prefers-reduced-motion: reduce)').matches` false in this installed Playwright environment. Existing working coverage uses `page.emulateMedia`. Minimal test correction: call `page.emulateMedia({ reducedMotion: 'reduce' })` before navigation and retain the strict matchMedia assertion. No production change.
 - GREEN: exact focused command `npx playwright test e2e/preview.spec.ts --grep "task and focus scenes fit|scrolling is confined|keeps drawer and scene operations keyboard usable"` exited 0 with 7/7 passed in 11.2 s.
 - Full GREEN: `npm run test:e2e` exited 0 with 29/29 passed in 20.4 s; later `npm run verify` repeated 29/29 passed in 16.6 s.
+- Controller-review RED: after strengthening the local-scroll test, the unchanged planner fixture produced `scrollHeight = clientHeight = 153` and exit 1 at `expect(scrollHeight).toBeGreaterThan(clientHeight)`, proving the prior `scrollTop` assignment could remain zero. An initial attempt was invalid environmental evidence because stale Vite optimized dependencies returned HTTP 504; the unchanged rerun reached the expected behavioral assertion.
+- Controller-review GREEN: the test now appends temporary `aria-hidden` overflow content inside the real planner tabpanel, sets `scrollTop = 1`, captures strict overflow/scroll measurements, removes the content, and asserts document scroll remains zero. Exact focused command exited 0 with 1/1 passed in 2.4 s. No production hook or source change was added, and existing matrix/geometry coverage was retained.
 
 ## Exact gates
 
@@ -53,6 +55,7 @@
 
 - Ruling: Treat the five matrix cases as characterization because they passed on their first execution — honest evidence is stronger than inventing RED — cost if wrong: the report would overstate implementation work, but no product behavior changed.
 - Ruling: Exercise the planner tabpanel for browser local-scroll evidence instead of fabricating Tauri task data — it is a real user-visible drawer region available at 520 x 420 and avoids production test hooks — cost if wrong: task-body overflow remains covered by Tauri-path/native work only, while the required real planner local region remains binding here.
+- Ruling: Add temporary inert overflow content through Playwright to the mounted production planner tabpanel rather than add fixture-only production data/hooks — the assertion tests the real element's overflow ownership and requires actual local displacement while leaving application authorities untouched — cost if wrong: CSS depending specifically on organic planner-child structure might not be covered, but the local scrolling contract itself is directly executable and non-vacuous.
 - Ruling: Explicitly call `page.emulateMedia` because this installed Playwright did not activate reduced motion through describe-level `test.use` — the matchMedia assertion proves the actual runtime state — cost if wrong: a future Playwright version may make the explicit call redundant, but behavior remains correct.
 - Ruling: Do not create or launch an alternate native config — exact isolation would need coordinated identifier, app-data, notification, single-instance, and `startodo:` authorities, while startup calls `register_all`; the safety boundary forbids risking live user state — cost if wrong: fewer native smoke items are checked, but no user installation or registration is mutated.
 - Ruling: Browser E2E evidence may check UI usability, visual fallback, planner, and floating-state behavior, but may not be labeled Windows-native WebView2/installed-app evidence — this prevents overclaiming — cost if wrong: the checklist is conservative and leaves more items unchecked.
@@ -68,6 +71,6 @@
 ## Scoped status
 
 - Task 12 source/test scope currently consists only of E2E verification and documentation/report/ledger evidence; no production defect was observed after correcting test assumptions.
-- Final fresh `npm run verify` after the last test edit exited 0: diagnostics 0/0, units 85/85, Rust 84/84 + 0 + 0, Playwright 29/29, sidecar/build/fmt all passed.
+- Final fresh `npm run verify` after the controller-review scroll edit exited 0: diagnostics 0/0, units 85/85, Rust 84/84 + 0 + 0, Playwright 29/29 in 17.1 s, sidecar/build/fmt all passed.
 - UTF-8/nonempty audit passed for all four Task 12 files. Smoke checklist totals: 10 checked with concrete evidence; 38 unchecked and all 38 include explicit blockers.
 - Final diff/staging audit and commit hash are recorded by the closing commit/status evidence.

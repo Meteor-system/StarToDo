@@ -2,7 +2,7 @@
 
 ## Environment
 
-- Commit: `6416e303ec5ce37d47e64ce6b9d241bb5932327d` plus the uncommitted Task 12 E2E/checklist changes under verification.
+- Commit: Task 12 initial evidence commit `439473866cf4bfa11bcef5c677ff5f61a99ec5b0` plus the controller-review local-scroll strengthening under verification.
 - Windows version: Windows 11 Pro 10.0.26200 build 26200, 64-bit.
 - Display scale: 100% (96 DPI), supplied runtime fact; registry `Win8DpiScaling=0` was observed, while `LogPixels` was unset.
 - Monitor layout: one active AOC2702 display, 2560 x 1440 at 180 Hz on NVIDIA GeForce RTX 3060; supplied runtime fact says one active monitor.
@@ -48,7 +48,7 @@
 - [x] Narrow planner shows the date strip and one selected bucket. Observed evidence: Chromium at 520 x 420 showed eight reachable date tabs, exactly one selected tab, and one visible selected-bucket tabpanel while the wide board was hidden.
 - [ ] Reschedule failures restore the previous select value and show the existing error. Blocker: browser preview has no mutable task data/Tauri command failure path.
 - [ ] Planner-to-list navigation closes the drawer and focuses the task. Blocker: browser preview has no task rows.
-- [x] Planner scrolling never moves the document. Observed evidence: at 520 x 420 the visible planner tabpanel had local `overflow-y` auto/scroll, was programmatically exercised, and `document.scrollingElement.scrollTop` remained exactly 0; browser-error hooks stayed empty.
+- [x] Planner scrolling never moves the document. Observed evidence: at 520 x 420 the real visible planner tabpanel had local `overflow-y` auto/scroll; temporary inert overflow content made `scrollHeight > clientHeight`, setting local `scrollTop` produced a value greater than 0, the content was removed, and `document.scrollingElement.scrollTop` remained exactly 0; browser-error hooks stayed empty.
 
 ## Floating window
 
