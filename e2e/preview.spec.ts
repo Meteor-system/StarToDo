@@ -44,6 +44,21 @@ test('opens task tools as contextual drawers', async ({ page }) => {
   ).toBeVisible();
 });
 
+test('keeps quick capture resident outside the detailed task drawer', async ({ page }) => {
+  await page.goto('/');
+
+  const taskScene = page.getByRole('main', { name: '任务场景' });
+  const quickCapture = taskScene.getByRole('region', { name: '快速捕获' });
+  await expect(quickCapture).toBeVisible();
+  await expect(quickCapture.getByText('浏览器预览已禁用任务持久化；请在桌面应用中管理任务。', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '详细新建' }).click();
+  const drawer = page.getByRole('dialog', { name: '详细新建' });
+  await expect(drawer).toBeVisible();
+  await expect(quickCapture).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: '按行写下要推进的事' })).not.toBeAttached();
+});
+
 test('renders the browser preview page shell without runtime errors', async ({ page }) => {
   await page.goto('/');
 

@@ -38,6 +38,19 @@ The brief's required RED test was already present in `e2e/preview.spec.ts` as `o
 
 Only Task 6 scope is staged: `src/lib/components/TaskScene.svelte`, `src/lib/components/TaskCanvas.svelte`, `src/lib/components/TaskComposer.svelte`, `src/routes/+page.svelte`, `e2e/preview.spec.ts`, and this report. No unrelated dirty baseline files are staged. `+page.svelte` retains the unrelated `FocusMiniBar compact={false}` prop; TaskScene itself is rendered without a compact prop.
 
+## Fix round 3: resident quick capture
+
+Authority review identified that quick capture had been placed inside the detailed-create drawer, leaving the second TaskScene grid row occupied by detached tools instead of the permanent quick-capture surface. The correction moves the single search and exact five tools into the header, adds a named resident `快速捕获` region as row two, renders exactly one `TaskComposer` there when Tauri is available, retains the existing disabled-persistence notice there in browser preview, and leaves the detailed drawer form-only.
+
+TDD evidence:
+
+- RED: `$env:CI='1'; npm run test:e2e -- '--grep=keeps quick capture resident'` failed because `getByRole('region', { name: '快速捕获' })` was not found; the other nine preview tests passed.
+- GREEN: the same focused command passed with 10/10 preview tests after the resident region was implemented.
+- `npm run check`: passed, 0 errors and 0 warnings.
+- `npm run test:unit`: passed, 51/51 tests.
+- `$env:CI='1'; npm run test:e2e -- '--grep=keeps quick capture resident|task tools as contextual drawers|persistence|workspace'`: passed, 10/10 tests.
+- `git diff --check`: passed.
+
 ## Validation substrate and scope
 
 The verification ran in the Phase 1 worktree, which intentionally preserves prerequisite baseline changes outside the Task 6 commit range. In particular, Task 6 consumes the Task 5 `ContextDrawer.svelte` contract and depends on preserved baseline versions of `ProjectSidebar.svelte`, `TaskItem.svelte`, and `WeekPlanner.svelte`. Those dependency paths remain dirty/uncommitted relative to ordinary main and were deliberately not staged in Task 6. The committed Task 6 files are `TaskScene.svelte`, `TaskCanvas.svelte`, `TaskComposer.svelte`, `+page.svelte`, `e2e/preview.spec.ts`, this report, and the explicit deletion of `TaskWorkspace.svelte`. A standalone cherry-pick onto a clean ordinary-main checkout requires the prerequisite Task 5/baseline patch containing those dependency paths.

@@ -816,22 +816,23 @@
 
 <section class="task-scene" aria-labelledby="tasks-heading">
   <header class="scene-header">
-    <div><p class="eyebrow">任务场景</p><h2 id="tasks-heading">今天要推进什么？</h2></div>
-    {#if tauriAvailable}<button class="quiet" onclick={load} disabled={loading || trashLoading}>{(loading || trashLoading) ? '刷新中…' : '刷新'}</button>{/if}
+    <div class="scene-heading"><div><p class="eyebrow">任务场景</p><h2 id="tasks-heading">今天要推进什么？</h2></div>{#if tauriAvailable}<button class="quiet" onclick={load} disabled={loading || trashLoading}>{(loading || trashLoading) ? '刷新中…' : '刷新'}</button>{/if}</div>
+    <div class="scene-tools">
+      <label class="search-label" for="task-search">搜索任务</label>
+      <input bind:this={searchInput} id="task-search" class="search-input" bind:value={searchQuery} placeholder="搜索标题或备注" autocomplete="off" />
+      <button type="button" onclick={() => openTaskDrawer('create')}>详细新建</button><button type="button" onclick={() => openTaskDrawer('filters')}>筛选</button><button type="button" onclick={() => openTaskDrawer('projects')}>项目</button><button type="button" onclick={() => openTaskDrawer('planner')}>周计划</button><button type="button" onclick={() => openTaskDrawer('trash')} disabled={trashLoading}>回收站{deletedTasks.length ? ` (${deletedTasks.length})` : ''}</button>
+    </div>
   </header>
-  <div class="scene-tools">
-    <label class="search-label" for="task-search">搜索任务</label>
-    <input bind:this={searchInput} id="task-search" class="search-input" bind:value={searchQuery} placeholder="搜索标题或备注" autocomplete="off" />
-    <button type="button" onclick={() => openTaskDrawer('create')}>详细新建</button><button type="button" onclick={() => openTaskDrawer('filters')}>筛选</button><button type="button" onclick={() => openTaskDrawer('projects')}>项目</button><button type="button" onclick={() => openTaskDrawer('planner')}>周计划</button><button type="button" onclick={() => openTaskDrawer('trash')} disabled={trashLoading}>回收站{deletedTasks.length ? ` (${deletedTasks.length})` : ''}</button>
-  </div>
+  <section class="quick-capture" aria-label="快速捕获">
+    {#if tauriAvailable}<TaskComposer {tauriAvailable} disabled={createBusy || selectedProjectIsArchived} onCreate={handleComposerCreate} />{:else}<p class="notice" role="status">浏览器预览已禁用任务持久化；请在桌面应用中管理任务。</p>{/if}
+  </section>
   <p class="sr-only" aria-live="polite">{announcement}</p>
-  {#if !initialized}<p class="muted">正在初始化任务场景…</p>{:else if !tauriAvailable}<p class="notice" role="status">浏览器预览已禁用任务持久化；请在桌面应用中管理任务。</p>{:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>{:else if loading}<p class="muted">正在读取任务…</p>{:else}
+  {#if !initialized}<p class="muted">正在初始化任务场景…</p>{:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>{:else if loading}<p class="muted">正在读取任务…</p>{:else if tauriAvailable}
     <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={() => undefined} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
   {/if}
 </section>
 
 <ContextDrawer open={activeDrawer === 'create'} drawerId="create-task-drawer" title="详细新建" onClose={closeTaskDrawer}>
-  <TaskComposer tauriAvailable={tauriAvailable} disabled={createBusy || selectedProjectIsArchived} onCreate={handleComposerCreate} />
   <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
     <div class="form-header"><div><h3>详细任务</h3><p class="form-project">归属：{selectedProject === 'all' || selectedProject === 'inbox' ? '收件箱' : selectedProjectRecord?.name ?? '收件箱'}</p></div><button type="submit" disabled={createBusy || selectedProjectIsArchived}>{createBusy ? '添加中…' : '添加任务'}</button></div>
     {#if selectedProjectIsArchived}<p class="error" role="alert">当前项目已归档；恢复项目或切换到收件箱后才能创建任务。</p>{/if}
@@ -851,8 +852,10 @@
 
 <style>
   .task-scene { height:100%; min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); container-type:inline-size; }
-  .scene-header,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }
+  .scene-header { display:grid; min-width:0; }
+  .scene-heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }
   .scene-tools { display:flex; align-items:center; gap:8px; padding:14px 0; min-width:0; }
+  .quick-capture { min-width:0; }
   .scene-tools button { flex:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:7px 8px; color:var(--text-soft); background:transparent; font-size:12px; }
   .scene-tools button:hover:not(:disabled) { border-color:var(--text-soft); background:var(--surface-hover); color:var(--text); }
   .search-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
