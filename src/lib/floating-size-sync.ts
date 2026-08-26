@@ -55,6 +55,15 @@ export function acceptFloatingPreferencesRead<T extends { displayMode: FloatingS
   };
 }
 
+export function acceptFloatingReconciliation<T>(
+  state: FloatingSizeSyncState<T>,
+  request: FloatingSizeRequest,
+  preferences: T
+): FloatingSizeSyncState<T> {
+  if (state.desired?.generation !== request.generation) return state;
+  return { ...state, ready: true, preferences };
+}
+
 export function failFloatingPreferencesRead<T>(
   state: FloatingSizeSyncState<T>
 ): FloatingSizeSyncState<T> {

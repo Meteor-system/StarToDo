@@ -78,7 +78,8 @@ GREEN:
 - `npx playwright test --grep "active capsule"`: 2/2 passed.
 - Forward Tab preserves open-focus across capsule subtree replacement.
 - Direct focus of the reverse-tab destination preserves the logical expand target as the stable expanded hide control.
-- Explicit expand-button click enters interaction-expanded without synthetic pointer/focus ownership.
+- Explicit expand-button activation enters interaction-expanded without synthetic pointer/focus ownership.
+- A real Playwright mouse `.click()` cannot isolate this path: pointer movement fires the root `pointerenter`, expands the companion, and detaches the capsule button before click delivery. The final E2E therefore enables touch and taps the real capsule button coordinates, exercising the component callback without pre-hover expansion or synthetic DOM `dispatchEvent`.
 - Transient destroyed-node focusout is ignored only while restoration is pending; restored focusin does not loop.
 
 ### Pomodoro ordering and warnings
@@ -90,9 +91,11 @@ RED:
 
 GREEN:
 
-- 3/3 coordinator tests passed.
-- A single monotonic epoch covers reads and mutations: the newer start wins.
-- Command results are accepted only while their token is current, then a fresh authority read starts.
+- Initial coordinator GREEN was 3/3.
+- Follow-up RED: the stale-command test expected notification warning `notify` while preserving the newer read snapshot; 1/3 failed because the warning remained null.
+- Follow-up GREEN: 3/3 passed. A stale command result cannot replace the newer authority snapshot, but its independently relevant notification warning is preserved.
+- A single monotonic epoch covers reads and mutations: the newer start wins for snapshots.
+- Command snapshots are accepted only while their token is current, then a fresh authority read starts.
 - Read/listener warnings, mutation failures, and notification warnings are separate; a successful read cannot erase a notification warning.
 - `pomodoroBusy` still prevents local mutation concurrency; no browser-derived snapshot is accepted.
 
@@ -105,8 +108,12 @@ RED:
 
 GREEN:
 
-- 7/7 size coordinator tests passed.
-- Covers initial preference-read gate, gate failure drain, failure with no spin, explicit later same-mode retry, superseded failure, ambiguous-failure reconciliation, ABA response rejection, and latest-generation preference acceptance.
+- Initial size coordinator GREEN was 7/7.
+- Follow-up RED: the ambiguous-failure test imported the required reconciliation-specific acceptance API; 1/7 failed because `acceptFloatingReconciliation` did not exist.
+- Follow-up GREEN: 8/8 passed after adding reconciliation acceptance plus an obsolete-generation rejection test.
+- Reconciliation updates ready/preferences only for its still-current request generation and never advances presentation `appliedGeneration`; after an expanded/userResized/different-width reconciliation there is no immediate spin, while a later explicit retry yields the same-generation expanded request.
+- `requestSizeSync` creates a new generation only for a semantic mode change. An explicit same-mode event only clears the matching failed marker, avoiding redundant commands during ordinary focus/click interactions.
+- Covers initial preference-read gate, gate failure drain, failure with no spin, explicit later same-mode retry, superseded failure, ambiguous-failure reconciliation, ABA response rejection, obsolete reconciliation rejection, and latest-generation preference acceptance.
 
 ABA timeline:
 
@@ -175,7 +182,7 @@ At active capsule 340x64 with mocked Tauri:
 
 Final post-code evidence:
 
-- Direct focused reducer/coordinator files: 3 files, 22/22 tests passed.
+- Direct focused reducer/coordinator files after model-gap fixes: 3 files, 23/23 tests passed.
 - `npm run check`: 0 errors, 0 warnings.
 - Direct focused Playwright (`active capsule|expanded idle companion`): 3/3 passed.
 - Full `npm run test:unit`: 9 files, 75/75 passed.

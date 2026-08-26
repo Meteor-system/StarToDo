@@ -46,7 +46,7 @@ export function acceptPomodoroCommand<T>(
   snapshot: T,
   notificationWarning: string | null
 ): PomodoroCoordinationState<T> {
-  if (token !== state.epoch) return state;
+  if (token !== state.epoch) return { ...state, notificationWarning };
   return {
     ...state,
     snapshot,

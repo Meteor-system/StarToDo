@@ -32,6 +32,7 @@
   } from '$lib/floating-coordinator';
   import {
     acceptFloatingPreferencesRead,
+    acceptFloatingReconciliation,
     acceptFloatingSizeFailure,
     acceptFloatingSizeSuccess,
     beginFloatingSizeRequest,
@@ -282,7 +283,7 @@
     try {
       const next = await getFloatingWindowPreferences();
       if (disposed || sizeSync.desired?.generation !== generation) return;
-      sizeSync = acceptFloatingPreferencesRead(sizeSync, next);
+      sizeSync = acceptFloatingReconciliation(sizeSync, { ...sizeSync.desired }, next);
     } catch {
       // The original command warning is more actionable; reconciliation is best effort.
     }

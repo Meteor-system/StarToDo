@@ -24,7 +24,7 @@ describe('floating Pomodoro coordination', () => {
     coordination = acceptPomodoroCommand(coordination, command.token, 'command-older', 'notify');
 
     expect(coordination.snapshot).toBe('read-newer');
-    expect(coordination.notificationWarning).toBeNull();
+    expect(coordination.notificationWarning).toBe('notify');
   });
 
   it('keeps notification warnings separate from successful read warnings', () => {

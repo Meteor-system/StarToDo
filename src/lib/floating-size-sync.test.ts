@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   acceptFloatingPreferencesRead,
+  acceptFloatingReconciliation,
   acceptFloatingSizeFailure,
   acceptFloatingSizeSuccess,
   beginFloatingSizeRequest,
@@ -90,12 +91,25 @@ describe('floating size sync coordination', () => {
     const request = nextFloatingSizeRequest(sync)!;
     sync = beginFloatingSizeRequest(sync, request);
     sync = acceptFloatingSizeFailure(sync, request);
-    sync = acceptFloatingPreferencesRead(sync, prefs('expanded', 380, true));
+    sync = acceptFloatingReconciliation(sync, request, prefs('expanded', 380, true));
 
     expect(sync.preferences).toEqual(prefs('expanded', 380, true));
     expect(nextFloatingSizeRequest(sync)).toBeNull();
     sync = retryFloatingSize(sync);
     expect(nextFloatingSizeRequest(sync)).toEqual(request);
+  });
+
+  it('rejects reconciliation preferences from an obsolete generation', () => {
+    let sync = acceptFloatingPreferencesRead(state(), prefs('capsule', 340));
+    sync = requestFloatingSize(sync, 'expanded');
+    const obsolete = nextFloatingSizeRequest(sync)!;
+    sync = beginFloatingSizeRequest(sync, obsolete);
+    sync = requestFloatingSize(sync, 'capsule');
+    sync = acceptFloatingSizeFailure(sync, obsolete);
+    sync = acceptFloatingReconciliation(sync, obsolete, prefs('expanded', 380, true));
+
+    expect(sync.preferences).toEqual(prefs('capsule', 340));
+    expect(nextFloatingSizeRequest(sync)).toMatchObject({ mode: 'capsule' });
   });
 
   it('accepts preferences only for the latest semantic request generation', () => {
