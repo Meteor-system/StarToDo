@@ -1,5 +1,6 @@
 export function ownsTaskDetailsOperation(
   currentTaskId: number | null,
+  currentDraftTaskId: number | null,
   currentDraftGeneration: number,
   currentOperationId: number,
   operationTaskId: number,
@@ -8,6 +9,7 @@ export function ownsTaskDetailsOperation(
 ): boolean {
   return (
     currentTaskId === operationTaskId &&
+    currentDraftTaskId === operationTaskId &&
     currentDraftGeneration === operationDraftGeneration &&
     currentOperationId === operationId
   );

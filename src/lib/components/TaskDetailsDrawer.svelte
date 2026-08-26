@@ -130,6 +130,7 @@
 
   function ownsPresentationOperation(context: { taskId: number; draftGeneration: number; operationId: number }): boolean {
     return ownsTaskDetailsOperation(
+      task?.id ?? null,
       draftTaskId,
       draftGeneration,
       activeOperationId,

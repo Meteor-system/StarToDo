@@ -56,21 +56,21 @@ describe('task row keyboard completion', () => {
 });
 
 describe('task details operation ownership', () => {
-  it('owns an operation when task, draft generation, and operation match', () => {
+  it('owns an operation when current task, draft task, generation, and operation match', () => {
     expect(
-      ownsTaskDetailsOperation(7, 3, 11, 7, 3, 11)
+      ownsTaskDetailsOperation(7, 7, 3, 11, 7, 3, 11)
     ).toBe(true);
   });
 
-  it('rejects an operation after switching tasks', () => {
+  it('rejects an operation when the prop task switches before the draft effect resets', () => {
     expect(
-      ownsTaskDetailsOperation(8, 3, 11, 7, 3, 11)
+      ownsTaskDetailsOperation(8, 7, 3, 11, 7, 3, 11)
     ).toBe(false);
   });
 
   it('rejects an operation after reopening the same task with a newer draft generation', () => {
     expect(
-      ownsTaskDetailsOperation(7, 4, 11, 7, 3, 11)
+      ownsTaskDetailsOperation(7, 7, 4, 11, 7, 3, 11)
     ).toBe(false);
   });
 });

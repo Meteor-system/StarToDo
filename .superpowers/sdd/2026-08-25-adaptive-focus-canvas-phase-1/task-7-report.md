@@ -53,6 +53,8 @@ TDD evidence for the ownership helper:
 
 - RED: `npm run test:unit -- src/lib/task-interaction.test.ts` — 3 ownership cases failed with `TypeError: ownsTaskDetailsOperation is not a function`; the original 4 keyboard cases passed.
 - GREEN: the same focused command — 1 file passed, 7/7 tests passed after adding the minimal pure helper.
+- Ownership wiring follow-up RED: the realistic pre-effect switch case now passes both current prop task B and still-current draft task A. The old six-argument helper misread the new signature, causing the fully matching seven-argument ownership case to fail (`expected false to be true`) while the switched-task race case correctly remained unowned.
+- Ownership wiring follow-up GREEN: the helper now requires current prop task id === current draft task id === operation task id, plus matching generation and operation id; the drawer passes `task?.id ?? null` and `draftTaskId`. The focused suite returned 7/7 passed.
 
 Deferred Minor: component-boundary E2E coverage for normal row Space, trash-row Space, and nested-button keyboard behavior is deferred to Task 12's keyboard matrix; no static substitute weakens that requirement.
 
@@ -72,7 +74,7 @@ Deferred Minors: the Task 12 keyboard-matrix coverage above.
 
 Ruling: Keep nested ConfirmDialog z-index unchanged based on measured browser stacking evidence — the fixed confirmation covered the full Chromium viewport and received center hit testing inside the drawer stacking context — cost if wrong: Windows WebView could render it differently, so Task 12 Windows smoke must verify confirmation visibility/Escape.
 
-Ruling: Gate presentation close/error/busy by task id + draft generation — each operation also carries a unique operation id so a later operation in the same draft owns presentation state — cost if wrong: a legitimate old operation may apply data without dismissing the current drawer, requiring explicit user close.
+Ruling: Gate presentation close/error/busy by current prop task id + current draft task id + draft generation — each operation also carries a unique operation id so a later operation in the same draft owns presentation state, without relying on effect timing after a prop switch — cost if wrong: a legitimate old operation may apply data without dismissing the current drawer, requiring explicit user close.
 
 Ruling: Keep the required `TaskCanvas` callback/operation surface even when `TaskItem` no longer consumes update/delete callbacks — the details drawer and scene still require the Task 6 integration boundary — cost if wrong: a future cleanup may move more callbacks out of `TaskCanvas`.
 
