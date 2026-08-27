@@ -41,6 +41,8 @@
     onPermanentlyDelete?: (id: number) => Promise<MutationWarningResult>;
     onRestored?: (task: Task, result: TaskMutationWithToken) => Promise<boolean>;
     onPermanentlyRemoved?: (id: number, result: MutationWarningResult) => Promise<boolean>;
+    pomodoroCount?: number;
+    onFocus?: (taskId: number) => void;
   }
 
   let {
@@ -59,7 +61,9 @@
     onRestore,
     onPermanentlyDelete,
     onRestored,
-    onPermanentlyRemoved
+    onPermanentlyRemoved,
+    pomodoroCount = 0,
+    onFocus
   }: Props = $props();
   let editing = $state(false);
   let confirmingDelete = $state(false);
@@ -319,6 +323,7 @@
         {#if taskProject}<span>项目 {taskProject.name}{#if taskProject.archivedAtUnixMs !== null}（已归档）{/if}</span>{/if}
         {#if task.priority !== 'none'}<span>优先级 {priorityLabel(task.priority)}</span>{/if}
         {#if task.recurrenceKind !== 'none'}<span>重复 {recurrenceLabel(task.recurrenceKind)}</span>{/if}
+        {#if !trashMode && task.completedAtUnixMs === null && pomodoroCount > 0}<span>累计专注 {pomodoroCount}</span>{/if}
       </div>
     </div>
     <div class="actions">
@@ -332,8 +337,9 @@
     </div>
   </div>
 
-  {#if !trashMode && task.completedAtUnixMs === null && (onSnooze || onDeferToTomorrow)}
-    <div class="quick-actions" aria-label={`${task.title} 的提醒后操作`}>
+  {#if !trashMode && task.completedAtUnixMs === null && (onFocus || onSnooze || onDeferToTomorrow)}
+    <div class="quick-actions" aria-label={`${task.title} 的快捷操作`}>
+      {#if onFocus}<button type="button" class="focus-action" aria-label={`为“${task.title}”预选专注`} onclick={() => onFocus?.(task.id)} disabled={busy}>专注</button>{/if}
       {#if onSnooze}
         <button type="button" class="quiet" aria-label={`15 分钟后提醒：${task.title}`} onclick={() => void handleSnooze(15 * 60 * 1_000)} disabled={busy}>15 分钟后</button>
         <button type="button" class="quiet" aria-label={`1 小时后提醒：${task.title}`} onclick={() => void handleSnooze(60 * 60 * 1_000)} disabled={busy}>1 小时后</button>
@@ -472,8 +478,34 @@
 </article>
 
 <style>
-  .task { padding: 13px 0; border-bottom: 1px solid var(--line); } .task.complete { opacity: .72; } .task.trashed { opacity: .84; } .completion-placeholder { display:inline-flex; width:25px; height:25px; align-items:center; justify-content:center; color:var(--muted); font-size:20px; }
-  .task.activated { margin-inline:-8px; padding-inline:8px; border-left:2px solid var(--blue); background:rgba(91,169,255,.08); box-shadow:0 0 0 1px rgba(91,169,255,.12); }
-  .task-row { display:flex; gap:10px; align-items:flex-start; }.completion { width:25px; height:25px; padding:0; border:1px solid #7b8794; border-radius:50%; color:var(--blue); background:transparent; font-weight:700; }.complete .completion { border-color:var(--blue); background:var(--blue); color:#07111f; }.summary { min-width:0; flex:1; }.task-title { overflow-wrap:anywhere; font-size:14px; font-weight:560; }.complete .task-title { text-decoration:line-through; }.metadata { display:flex; gap:9px; flex-wrap:wrap; margin-top:4px; color:var(--muted); font-size:11px; }.actions,.editor-actions,.quick-actions { display:flex; gap:6px; flex-wrap:wrap; }.quick-actions { margin:8px 0 0 35px; }.quiet { border:0; padding:4px 6px; color:var(--muted); background:transparent; font-size:12px; }.danger { color:#ffb4b4; }.notes { margin:8px 0 0 35px; color:#bac4cf; white-space:pre-wrap; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }.editor { display:grid; gap:6px; margin:12px 0 0 35px; }.editor label,.field-note { color:var(--muted); font-size:11px; }.field-note { margin:0; line-height:1.5; }.editor input,.editor textarea,.editor select { width:100%; border:1px solid var(--line); border-radius:4px; padding:7px 8px; color:inherit; background:#171a1f; }.editor textarea { min-height:76px; resize:vertical; }.editor-actions { margin-top:4px; }.error { margin:8px 0 0 35px; color:#ffaeae; font-size:12px; } button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
-  @media (prefers-reduced-motion: reduce) { .task { transition:none; } }
+  .task { padding:14px 0; border-bottom:1px solid var(--line); transition:background .15s ease; }
+  .task.complete { opacity:.66; }
+  .task.trashed { opacity:.82; }
+  .completion-placeholder { display:inline-flex; width:26px; height:26px; align-items:center; justify-content:center; color:var(--muted); font-size:20px; }
+  .task.activated { margin-inline:-8px; padding-inline:8px; border-left:2px solid var(--info); background:var(--info-soft); }
+  .task-row { display:flex; gap:10px; align-items:flex-start; }
+  .completion { width:26px; height:26px; flex:none; padding:0; border:1px solid #777f8b; border-radius:50%; color:var(--accent); background:transparent; font-weight:700; transition:border-color .15s ease, background .15s ease, color .15s ease; }
+  .completion:hover:not(:disabled) { border-color:var(--accent); background:var(--accent-soft); }
+  .complete .completion { border-color:var(--accent); background:var(--accent); color:var(--accent-ink); }
+  .summary { min-width:0; flex:1; }
+  .task-title { overflow-wrap:anywhere; color:var(--text); font-size:14px; font-weight:620; line-height:1.4; }
+  .complete .task-title { text-decoration:line-through; }
+  .metadata { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; color:var(--muted); font-size:11px; }
+  .actions,.editor-actions,.quick-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .quick-actions { margin:9px 0 0 36px; }
+  .focus-action { border:1px solid color-mix(in srgb, var(--accent) 72%, var(--line)); border-radius:var(--radius-sm); padding:4px 8px; color:var(--accent-hover); background:var(--accent-soft); font-size:12px; font-weight:650; }
+  .focus-action:hover:not(:disabled) { color:var(--accent-ink); background:var(--accent); }
+  .quiet { border:0; border-radius:var(--radius-sm); padding:4px 6px; color:var(--muted); background:transparent; font-size:12px; }
+  .quiet:hover:not(:disabled) { color:var(--text-soft); background:rgba(255,255,255,.05); }
+  .danger { color:var(--danger); }
+  .notes { margin:8px 0 0 36px; color:var(--text-soft); white-space:pre-wrap; font-size:12px; line-height:1.55; overflow-wrap:anywhere; }
+  .editor { display:grid; gap:7px; margin:13px 0 0 36px; padding:12px; border:1px solid var(--line); border-radius:var(--radius-md); background:var(--surface); }
+  .editor label,.field-note { color:var(--muted); font-size:11px; }
+  .field-note { margin:0; line-height:1.5; }
+  .editor input,.editor textarea,.editor select { width:100%; border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:7px 8px; color:var(--text); background:#14161a; }
+  .editor textarea { min-height:76px; resize:vertical; }
+  .editor-actions { margin-top:4px; }
+  .editor-actions button:not(.quiet) { border:1px solid var(--accent); border-radius:var(--radius-sm); padding:6px 9px; color:var(--accent-ink); background:var(--accent); font-size:12px; font-weight:650; }
+  .error { margin:8px 0 0 36px; color:var(--danger); font-size:12px; }
+  @media (max-width:420px) { .task-row { display:grid; grid-template-columns:26px minmax(0,1fr); } .actions { grid-column:2; } .quick-actions,.notes,.editor,.error { margin-left:36px; } }
 </style>

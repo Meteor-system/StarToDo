@@ -89,7 +89,17 @@
 {/if}
 
 <style>
-  .backdrop { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(8,11,16,.68); }
-  .dialog { width:min(100%,420px); display:grid; gap:10px; padding:18px; border:1px solid rgba(255,180,180,.38); border-radius:7px; color:#edf1f6; background:#20242b; box-shadow:0 18px 56px rgba(0,0,0,.42); }
-  h2,p { margin:0; } h2 { font-size:16px; } p { color:#d6dee8; font-size:13px; line-height:1.55; }.actions { display:flex; justify-content:flex-end; gap:8px; margin-top:2px; }.danger { color:#ffb4b4; }.quiet { border:0; color:var(--muted); background:transparent; }.error { color:#ffaeae; } button { border:1px solid var(--line); border-radius:4px; padding:6px 9px; color:inherit; background:rgba(255,255,255,.05); font-size:12px; } button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .backdrop { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(5,6,8,.74); }
+  .dialog { width:min(100%,420px); display:grid; gap:11px; padding:18px; border:1px solid rgba(255,170,161,.42); border-radius:var(--radius-md); color:var(--text); background:var(--surface-raised); box-shadow:var(--shadow-overlay); }
+  h2,p { margin:0; }
+  h2 { font-size:16px; font-weight:650; }
+  p { color:var(--text-soft); font-size:13px; line-height:1.55; }
+  .actions { display:flex; justify-content:flex-end; gap:8px; margin-top:3px; }
+  .danger { border-color:rgba(255,170,161,.58); color:#35100e; background:#ffaaa1; }
+  .quiet { border-color:transparent; color:var(--muted); background:transparent; }
+  .error { color:var(--danger); }
+  button { border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:7px 10px; color:var(--text-soft); background:transparent; font-size:12px; }
+  button:hover:not(:disabled) { border-color:var(--text-soft); background:var(--surface-hover); color:var(--text); }
+  button.danger:hover:not(:disabled) { border-color:#ffc1ba; background:#ffc1ba; color:#35100e; }
+  @media (max-width:420px) { .backdrop { align-items:end; padding:12px; } .dialog { width:100%; } .actions > button { flex:1; } }
 </style>

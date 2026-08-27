@@ -67,6 +67,9 @@
     onReminderReconcile: () => Promise<ReminderReport>;
     onMutationWarning: (context: ReminderWarningContext) => void;
     onActivationResolved: (nonce: number) => void;
+    pomodoroCounts?: ReadonlyMap<number, number>;
+    onStartFocus?: (taskId: number) => void;
+    onPomodoroTasksChanged?: (unavailableTaskId?: number) => void;
   }
 
   const STATUS_FILTER_STORAGE_KEY = 'startodo.status-filter';
@@ -104,7 +107,10 @@
     activationNonce,
     onReminderReconcile,
     onMutationWarning,
-    onActivationResolved
+    onActivationResolved,
+    pomodoroCounts = new Map<number, number>(),
+    onStartFocus,
+    onPomodoroTasksChanged
   }: Props = $props();
   let tasks = $state<Task[]>([]);
   let deletedTasks = $state<Task[]>([]);
@@ -402,6 +408,7 @@
         projects = sortProjects(loadedProjects);
         normalizeSelectedProject();
         taskListReady = true;
+        onPomodoroTasksChanged?.();
         if (activationRetryNonce === activationNonce) {
           clearActivationRetry();
           activationInProgressNonce = -1;
@@ -454,6 +461,7 @@
       if (!isCurrentOperation(token)) return;
       upsert(result.task);
       reportMutationWarning(token, result.reminderWarning, result.task.id);
+      onPomodoroTasksChanged?.();
       title = '';
       notes = '';
       plannedDate = '';
@@ -523,7 +531,10 @@
       }
       if (isCurrentOperation(token)) {
         announcement = createdCount ? `已添加 ${createdCount} 项任务。` : '';
-        if (createdCount) void onReminderReconcile().catch(() => undefined);
+        if (createdCount) {
+          onPomodoroTasksChanged?.();
+          void onReminderReconcile().catch(() => undefined);
+        }
       }
       return { createdCount, remainingDrafts, error: firstError };
     } finally {
@@ -629,6 +640,8 @@
         result.nextTask.id,
       );
     }
+    if (kind === 'complete') onPomodoroTasksChanged?.(task.id);
+    else if (kind === 'restore' || kind === 'update') onPomodoroTasksChanged?.();
     announcement = kind === 'complete'
       ? result.nextTask
         ? `已完成任务：${task.title}；已创建下一次：${result.nextTask.title}`
@@ -663,6 +676,7 @@
     tasks = tasks.filter((task) => task.id !== id);
     void loadTrash().catch(() => undefined);
     reportMutationWarning(result.operationToken, result.reminderWarning);
+    onPomodoroTasksChanged?.(id);
     announcement = '已移入回收站，可在回收站中恢复。';
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
@@ -681,6 +695,7 @@
     deletedTasks = deletedTasks.filter((candidate) => candidate.id !== task.id);
     upsert(task);
     reportMutationWarning(result.operationToken, result.reminderWarning);
+    onPomodoroTasksChanged?.();
     announcement = `已从回收站恢复：${task.title}`;
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
@@ -693,6 +708,7 @@
     if (!isCurrentOperation(result.operationToken)) return false;
     deletedTasks = deletedTasks.filter((task) => task.id !== id);
     reportMutationWarning(result.operationToken, result.reminderWarning);
+    onPomodoroTasksChanged?.(id);
     announcement = '已永久删除任务。';
     await tick();
     if (isCurrentOperation(result.operationToken)) searchInput?.focus();
@@ -873,8 +889,10 @@
       />
       {#if activeWorkspaceView === 'list'}
       <TaskComposer tauriAvailable={tauriAvailable} disabled={createBusy || selectedProjectIsArchived} onCreate={handleComposerCreate} />
-      <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <div class="form-header"><div><h3>新增任务</h3><p class="form-project">归属：{selectedProject === 'all' ? '收件箱' : selectedProject === 'inbox' ? '收件箱' : selectedProjectRecord?.name ?? '收件箱'}</p></div><button type="submit" disabled={createBusy || selectedProjectIsArchived}>{createBusy ? '添加中…' : '添加任务'}</button></div>
+      <details class="new-task-details">
+        <summary>使用详细字段创建任务</summary>
+        <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <div class="form-header"><div><h3>详细任务</h3><p class="form-project">归属：{selectedProject === 'all' ? '收件箱' : selectedProject === 'inbox' ? '收件箱' : selectedProjectRecord?.name ?? '收件箱'}</p></div><button type="submit" disabled={createBusy || selectedProjectIsArchived}>{createBusy ? '添加中…' : '添加任务'}</button></div>
         {#if selectedProjectIsArchived}<p class="error" role="alert">当前项目已归档；恢复项目或切换到收件箱后才能创建任务。</p>{/if}
         <label for="new-title">标题</label>
         <input
@@ -954,8 +972,9 @@
         {#if createErrors.recurrenceKind}<p class="error" id="new-recurrence-error">{createErrors.recurrenceKind}</p>{/if}
         {#if createErrors.recurrenceTimezone}<p class="error" id="new-recurrence-timezone-error">{createErrors.recurrenceTimezone}</p>{/if}
         {#if recurrenceKind !== 'none'}<p class="field-note">将按 {recurrenceTimezone ?? localTimeZone()} 的本地日历生成后续实例。</p>{/if}
-        {#if createRequestError}<p class="error" role="alert">{createRequestError}</p>{/if}
-      </form>
+          {#if createRequestError}<p class="error" role="alert">{createRequestError}</p>{/if}
+        </form>
+      </details>
       {/if}
     {:else if compact}
       <p class="compact-note">切换到完整模式可创建任务、编辑字段和调整筛选。</p>
@@ -988,12 +1007,12 @@
     {:else}
       {#if activeTasks.length || statusFilter !== 'completed'}
         <section class="task-group" aria-labelledby="active-heading"><h3 id="active-heading">进行中 <span>{activeTasks.length}</span></h3>
-          {#if activeTasks.length}{#each activeTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的进行中任务。</p>{/if}
+          {#if activeTasks.length}{#each activeTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} pomodoroCount={pomodoroCounts.get(task.id) ?? 0} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的进行中任务。</p>{/if}
         </section>
       {/if}
       {#if completedTasks.length || statusFilter !== 'active'}
         <section class="task-group completed" aria-labelledby="completed-heading"><h3 id="completed-heading">已完成 <span>{completedTasks.length}</span></h3>
-          {#if completedTasks.length}{#each completedTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的已完成任务。</p>{/if}
+          {#if completedTasks.length}{#each completedTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} pomodoroCount={pomodoroCounts.get(task.id) ?? 0} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的已完成任务。</p>{/if}
         </section>
       {/if}
     {/if}
@@ -1001,5 +1020,5 @@
 </section>
 
 <style>
-  .workspace { padding:20px 0; } .workspace-tools { display:flex; align-items:center; gap:8px; padding-top:14px; } .workspace-views { display:flex; flex:none; gap:4px; } .workspace-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; } .workspace-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); } .form-project { margin:4px 0 0; color:var(--muted); font-size:11px; } .search-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } .search-input { min-width:0; flex:1; border:1px solid var(--line); border-radius:4px; padding:7px 9px; color:inherit; background:rgba(0,0,0,.14); } .trash-group { padding-top:12px; }.heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }.eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; } h2,h3 { margin:4px 0 0; font-weight:600; } h2 { font-size:19px; } h3 { font-size:13px; }.filters { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 0 4px; border-bottom:1px solid var(--line); }.execution-views { display:flex; flex-wrap:wrap; gap:5px; }.execution-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; }.execution-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); }.filters label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; }.filters select { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:#e7eef5; background:#171a1f; font-size:12px; }.filter-note,.compact-note,.field-note { margin:8px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }.task-group h3 { color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }.task-group h3 span { color:#d8e1eb; }.new-task { display:grid; gap:6px; padding:18px 0; border-bottom:1px solid var(--line); }.new-task label { color:var(--muted); font-size:11px; }.new-task label span { color:#707a86; }.new-task input,.new-task textarea,.new-task select { width:100%; border:1px solid var(--line); border-radius:4px; padding:8px 9px; color:inherit; background:rgba(0,0,0,.14); }.new-task textarea { min-height:68px; resize:vertical; }.task-group { padding-top:20px; }.task-group.completed { margin-top:8px; }.muted,.empty { color:var(--muted); font-size:12px; line-height:1.55; }.empty { padding:25px 0; border-bottom:1px solid var(--line); }.notice,.load-error { margin:16px 0; padding:10px 11px; color:#d9c08f; background:rgba(224,173,101,.09); border-left:2px solid #e0ad65; font-size:12px; }.load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#ffcece; border-color:#db7777; }.quiet { border:0; padding:4px 6px; color:var(--muted); background:transparent; font-size:12px; }.error { margin:2px 0; color:#ffaeae; font-size:12px; }.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .workspace { padding:20px 0; } .workspace-tools { display:flex; align-items:center; gap:8px; padding-top:14px; } .new-task-details { margin-top:14px; border-bottom:1px solid var(--line); } .new-task-details summary { width:max-content; padding:7px 0; color:var(--muted); font-size:12px; } .new-task-details[open] summary { color:var(--text-soft); } .workspace-views { display:flex; flex:none; gap:4px; } .workspace-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; } .workspace-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); } .form-project { margin:4px 0 0; color:var(--muted); font-size:11px; } .search-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } .search-input { min-width:0; flex:1; border:1px solid var(--line); border-radius:4px; padding:7px 9px; color:inherit; background:rgba(0,0,0,.14); } .trash-group { padding-top:12px; }.heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }.eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; } h2,h3 { margin:4px 0 0; font-weight:600; } h2 { font-size:19px; } h3 { font-size:13px; }.filters { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 0 4px; border-bottom:1px solid var(--line); }.execution-views { display:flex; flex-wrap:wrap; gap:5px; }.execution-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; }.execution-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); }.filters label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; }.filters select { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:#e7eef5; background:#171a1f; font-size:12px; }.filter-note,.compact-note,.field-note { margin:8px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }.task-group h3 { color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }.task-group h3 span { color:#d8e1eb; }.new-task { display:grid; gap:6px; padding:18px 0; border-bottom:1px solid var(--line); }.new-task label { color:var(--muted); font-size:11px; }.new-task label span { color:#707a86; }.new-task input,.new-task textarea,.new-task select { width:100%; border:1px solid var(--line); border-radius:4px; padding:8px 9px; color:inherit; background:rgba(0,0,0,.14); }.new-task textarea { min-height:68px; resize:vertical; }.task-group { padding-top:20px; }.task-group.completed { margin-top:8px; }.muted,.empty { color:var(--muted); font-size:12px; line-height:1.55; }.empty { padding:25px 0; border-bottom:1px solid var(--line); }.notice,.load-error { margin:16px 0; padding:10px 11px; color:#d9c08f; background:rgba(224,173,101,.09); border-left:2px solid #e0ad65; font-size:12px; }.load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#ffcece; border-color:#db7777; }.quiet { border:0; padding:4px 6px; color:var(--muted); background:transparent; font-size:12px; }.error { margin:2px 0; color:#ffaeae; font-size:12px; }.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
 </style>

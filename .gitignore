@@ -12,3 +12,8 @@ vite.config.ts.timestamp-*
 /tools/**/bin
 /tools/**/obj
 /tools/**/publish
+/test-results
+/playwright-report
+/blob-report
+/.playwright
+/coverage
