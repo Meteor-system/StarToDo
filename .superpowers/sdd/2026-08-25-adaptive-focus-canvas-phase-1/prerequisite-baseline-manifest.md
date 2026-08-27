@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Phase 1 is an attributable feature delta over protected pre-existing workspace state. Direct human instruction prohibited changing, staging, or attributing the prerequisite files below to this feature branch. This manifest records the exact feature-worktree bytes that were load-bearing for final verification at production source head `1a7734369e6e3389957b223a102053db95ee8bee`.
+Phase 1 is an attributable feature delta over protected pre-existing workspace state. Direct human instruction initially prohibited changing, staging, or attributing the prerequisite files below to this feature branch. This manifest records the exact feature-worktree bytes that were load-bearing for final verification at production source head `1a7734369e6e3389957b223a102053db95ee8bee`.
 
-A clean checkout of the Phase 1 Git range is not independently buildable: committed `src-tauri/src/lib.rs` declares `mod pomodoro`, while `src-tauri/src/pomodoro.rs` and other required source/configuration remain outside the committed range. The hashes below do not make those files part of Phase 1; they establish the byte identity required for a separately attributed prerequisite commit or integration base.
+A clean checkout of the Phase 1-only Git range remains intentionally non-self-contained: committed `src-tauri/src/lib.rs` declares `mod pomodoro`, while `src-tauri/src/pomodoro.rs` and other required source/configuration were protected prerequisite files outside that feature range. The prerequisite bytes were subsequently separately attributed in main commit `d86a795367730eb8c9586f9b2ab211fd16be2fc4` and combined with the complete Phase 1 range in merge commit `31619ddad29bc7bb81e2eafaca22c0eb2fa5327f`. The merged `main` tree is self-contained and was independently verified after integration; the hashes below preserve the pre-integration byte identity and provenance of the protected inputs.
 
 ## Exact protected bytes
 
@@ -39,13 +39,12 @@ Seventeen of the nineteen listed files were byte-identical between the isolated 
 
 For an exact reproduction of the verified final build, use the feature-worktree hashes in this manifest. Do not normalize or rewrite either worktree as part of Phase 1 cleanup. Unrelated workspace metadata (`$null`, `.agents/`, `.github/`, `.plan/`, `.superpowers/brainstorm/`, and `AGENTS.md`) is intentionally excluded because it is not a product build prerequisite.
 
-## Required integration order
+## Integration result
 
-1. Preserve the current workspace and retained stash until the prerequisite source is separately attributed.
-2. Establish a prerequisite commit/tree containing the exact approved product/configuration bytes above; keep it distinct from Phase 1 authorship.
-3. Confirm the prerequisite tree satisfies every hash, or document and review any intentional normalization before proceeding.
-4. Apply the complete Phase 1 range rather than isolated task commits.
-5. Verify the resulting combined tree is clean and self-contained.
-6. Re-run `npm run verify` and `npm run tauri -- build -- --bundles nsis` from that clean tree.
-7. Record the clean combined tree ID, notification-host SHA-256, installer size/SHA-256, and signing status.
-8. Do not represent merge or release as complete until the 14 unchecked Windows rows are either executed in a disposable installed environment or remain explicitly deferred.
+1. The workspace and retained `stash@{0}` were preserved while the prerequisite source was separately attributed.
+2. Main commit `d86a795367730eb8c9586f9b2ab211fd16be2fc4` establishes the approved prerequisite baseline as a distinct commit, separate from Phase 1 task authorship.
+3. The complete Phase 1 range was merged locally with commit `31619ddad29bc7bb81e2eafaca22c0eb2fa5327f`; its merged tree is `aae1c5da63d9f052e9fde2dc33ae48a797311fff` before this documentation follow-up.
+4. Post-merge `npm run verify` exited 0: Svelte/TypeScript 0 errors/0 warnings, Vitest 9 files/86 tests, notification-host publish, static build, Rust format check, Rust 87 tests plus two zero-test targets, and Playwright 35/35.
+5. Post-merge `npm run tauri -- build -- --bundles nsis` exited 0. The generated installer was 29,099,220 bytes, SHA-256 `E73C9C001CEC245641407DDD19016C945986DE341E9D5B279F4D3C51AA1B0AB7`, Authenticode `NotSigned`; merged notification-host copies were 93,107,335 bytes with SHA-256 `52AC4808B6E8DBB5DD5E6B7DB940040FB0F9A2523873CB98A05FAECBD064B1A8`.
+6. The exact protected-input hashes above remain the provenance record for the pre-integration bytes. `package-lock.json` is 80,381 bytes in the merged working tree because Git's configured checkout conversion differs from the 80,378-byte feature-worktree snapshot; no semantic dependency change was made during integration.
+7. The 14 unchecked Windows rows remain explicitly deferred; the unsigned installer was built but not installed or launched, and native observations remain tied to their listed native source/binary revisions.
