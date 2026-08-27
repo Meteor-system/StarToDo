@@ -1,8 +1,10 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { onDestroy, tick } from 'svelte';
+  import ContextDrawer from '$lib/components/ContextDrawer.svelte';
   import ProjectSidebar from '$lib/components/ProjectSidebar.svelte';
+  import TaskCanvas from '$lib/components/TaskCanvas.svelte';
   import TaskComposer from '$lib/components/TaskComposer.svelte';
-  import TaskItem from '$lib/components/TaskItem.svelte';
+  import TaskDetailsDrawer from '$lib/components/TaskDetailsDrawer.svelte';
   import WeekPlanner from '$lib/components/WeekPlanner.svelte';
   import { readPreference, writePreference } from '$lib/preferences';
   import {
@@ -56,12 +58,16 @@
     type TaskOperationToken
   } from '$lib/tasks';
 
-  type WorkspaceView = 'list' | 'week';
+  type TaskDrawer = 'create' | 'filters' | 'projects' | 'planner' | 'trash' | null;
+
+  interface CompletionFeedback {
+    id: number;
+    title: string;
+  }
 
   interface Props {
     tauriAvailable: boolean;
     initialized: boolean;
-    compact: boolean;
     activationId: number | null;
     activationNonce: number;
     onReminderReconcile: () => Promise<ReminderReport>;
@@ -75,7 +81,6 @@
   const STATUS_FILTER_STORAGE_KEY = 'startodo.status-filter';
   const EXECUTION_VIEW_STORAGE_KEY = 'startodo.execution-view';
   const PROJECT_SELECTION_STORAGE_KEY = 'startodo.project-selection';
-  const WORKSPACE_VIEW_STORAGE_KEY = 'startodo.workspace-view';
   const LEGACY_DATE_FILTER_STORAGE_KEY = 'startodo.date-filter';
 
   function storedFilter<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
@@ -102,7 +107,6 @@
   let {
     tauriAvailable,
     initialized,
-    compact,
     activationId,
     activationNonce,
     onReminderReconcile,
@@ -134,11 +138,14 @@
   let recurrenceTimezone = $state<string | null>(null);
   let statusFilter = $state<StatusFilter>(storedFilter(STATUS_FILTER_STORAGE_KEY, ['all', 'active', 'completed'], 'all'));
   let executionView = $state<ExecutionView>(storedExecutionView());
-  let workspaceView = $state<WorkspaceView>(storedFilter(WORKSPACE_VIEW_STORAGE_KEY, ['list', 'week'], 'list'));
+  let activeDrawer = $state<TaskDrawer>(null);
+  let selectedTaskId = $state<number | null>(null);
+  let completionFeedback = $state<CompletionFeedback | null>(null);
+  let completionFeedbackSequence = 0;
+  let completionFeedbackTimer: ReturnType<typeof window.setTimeout> | undefined;
   let plannerWeekStart = $state(weekStartLocalDate(todayLocalDate()));
   let nowUnixMs = $state(Date.now());
   let searchQuery = $state('');
-  let showTrash = $state(false);
   let announcement = $state('');
   let dataRevision = 0;
   let taskOperationSequence = 0;
@@ -156,11 +163,8 @@
   let searchInput = $state<HTMLInputElement>();
 
   let currentLocalDate = $derived(localDateForEpochMs(nowUnixMs) ?? todayLocalDate());
-  let activeWorkspaceView = $derived(compact || showTrash ? 'list' : workspaceView);
-  let currentTasks = $derived(showTrash ? deletedTasks : tasks);
-  let visibleTasks = $derived(currentTasks.filter((task) =>
-    (showTrash || isVisible(task)) && searchMatches(task, true)
-  ));
+  let visibleTasks = $derived(tasks.filter((task) => isVisible(task) && searchMatches(task, true)));
+  let visibleDeletedTasks = $derived(deletedTasks.filter((task) => searchMatches(task, true)));
   let activeTasks = $derived(visibleTasks.filter((task) => task.completedAtUnixMs === null));
   let completedTasks = $derived(visibleTasks.filter((task) => task.completedAtUnixMs !== null));
   let plannerTasks = $derived(tasks.filter((task) =>
@@ -177,6 +181,22 @@
   let selectedProjectIsArchived = $derived(
     selectedProjectRecord !== null && selectedProjectRecord.archivedAtUnixMs !== null
   );
+  let selectedTask = $derived(
+    tasks.find((task) => task.id === selectedTaskId) ?? null
+  );
+
+  $effect(() => {
+    if (selectedTaskId !== null && selectedTask === null) selectedTaskId = null;
+  });
+
+  function showCompletionFeedback(task: Task): void {
+    if (completionFeedbackTimer !== undefined) window.clearTimeout(completionFeedbackTimer);
+    completionFeedback = { id: ++completionFeedbackSequence, title: task.title };
+    completionFeedbackTimer = window.setTimeout(() => {
+      completionFeedback = null;
+      completionFeedbackTimer = undefined;
+    }, 900);
+  }
 
   function markMutation(): void {
     dataRevision += 1;
@@ -230,7 +250,16 @@
 
   function selectProject(selection: ProjectSelection): void {
     selectedProject = selection;
-    if (selection !== 'all' && selection !== 'inbox') showTrash = false;
+  }
+
+  function openTaskDrawer(drawer: Exclude<TaskDrawer, null>): void {
+    activeDrawer = drawer;
+    if (drawer === 'trash') void loadTrash().catch(() => undefined);
+    if (drawer === 'planner') plannerWeekStart = weekStartLocalDate(currentLocalDate);
+  }
+
+  function closeTaskDrawer(): void {
+    activeDrawer = null;
   }
 
   async function createProject(name: string): Promise<void> {
@@ -277,7 +306,7 @@
   }
 
   function executionMatches(task: Task): boolean {
-    const view = compact ? 'today' : executionView;
+    const view = executionView;
     if (view === 'all') return true;
 
     const active = task.completedAtUnixMs === null;
@@ -298,7 +327,7 @@
 
   function isVisible(task: Task): boolean {
     if (activationId !== null && task.id === activationId) return true;
-    const filter = compact ? 'active' : statusFilter;
+    const filter = statusFilter;
     const statusMatches = filter === 'all' ||
       (filter === 'active' && task.completedAtUnixMs === null) ||
       (filter === 'completed' && task.completedAtUnixMs !== null);
@@ -352,7 +381,7 @@
       activationRetryTimer = undefined;
       if (activationNonce !== nonce) return;
       activationRetryNonce = null;
-      if (showTrash || !taskListReady || loadError !== null) void load();
+      if (!taskListReady || loadError !== null) void load();
     }, delayMs);
   }
 
@@ -384,14 +413,6 @@
 
   async function load(): Promise<void> {
     if (!tauriAvailable) return;
-    if (showTrash) {
-      const loadedTrash = await loadTrash().catch(() => null);
-      if (loadedTrash !== null && activationRetryNonce === activationNonce) {
-        clearActivationRetry();
-        activationInProgressNonce = -1;
-      }
-      return;
-    }
     if (loading) {
       refreshRequested = true;
       return;
@@ -432,7 +453,7 @@
     } finally {
       if (generation === loadGeneration) {
         loading = false;
-        if (refreshRequested && !showTrash) {
+        if (refreshRequested) {
           refreshRequested = false;
           void load();
         }
@@ -584,12 +605,6 @@
     return { reminderWarning, operationToken };
   }
 
-  function setWorkspaceView(view: WorkspaceView): void {
-    if (compact || showTrash) return;
-    workspaceView = view;
-    if (view === 'week') plannerWeekStart = weekStartLocalDate(currentLocalDate);
-  }
-
   function setPlannerWeekStart(weekStart: string): void {
     plannerWeekStart = weekStartLocalDate(weekStart);
   }
@@ -605,31 +620,24 @@
   }
 
   async function openPlannerTaskInList(id: number): Promise<void> {
-    showTrash = false;
-    workspaceView = 'list';
+    activeDrawer = null;
     executionView = 'all';
     statusFilter = 'active';
     searchQuery = '';
     await tick();
+    const region = document.querySelector<HTMLElement>('[data-scroll-region="tasks"]');
     const target = document.getElementById(`task-${id}`);
-    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (region && target) region.scrollTo({ top: Math.max(0, target.offsetTop - region.clientHeight / 2), behavior: 'smooth' });
     document.getElementById(`task-action-${id}`)?.focus();
-  }
-
-  function toggleTrash(): void {
-    if (compact) return;
-    workspaceView = 'list';
-    showTrash = !showTrash;
-    searchQuery = '';
-    if (showTrash) void loadTrash().catch(() => undefined);
   }
 
   async function handleChanged(task: Task, kind: TaskChangeKind, result: TaskMutationWithToken): Promise<boolean> {
     if (!isCurrentOperation(result.operationToken)) return false;
-    const taskIndex = visibleTasks.findIndex((candidate) => candidate.id === task.id);
+    const focusCandidates = kind === 'complete' ? activeTasks : visibleTasks;
+    const taskIndex = focusCandidates.findIndex((candidate) => candidate.id === task.id);
     const adjacentTaskId = taskIndex < 0
       ? undefined
-      : visibleTasks[taskIndex + 1]?.id ?? visibleTasks[taskIndex - 1]?.id;
+      : focusCandidates[taskIndex + 1]?.id ?? focusCandidates[taskIndex - 1]?.id;
     upsert(task);
     if (kind === 'complete' && result.nextTask) upsert(result.nextTask);
     reportMutationWarning(result.operationToken, result.reminderWarning, task.id);
@@ -640,8 +648,10 @@
         result.nextTask.id,
       );
     }
-    if (kind === 'complete') onPomodoroTasksChanged?.(task.id);
-    else if (kind === 'restore' || kind === 'update') onPomodoroTasksChanged?.();
+    if (kind === 'complete') {
+      onPomodoroTasksChanged?.(task.id);
+      showCompletionFeedback(task);
+    } else if (kind === 'restore' || kind === 'update') onPomodoroTasksChanged?.();
     announcement = kind === 'complete'
       ? result.nextTask
         ? `已完成任务：${task.title}；已创建下一次：${result.nextTask.title}`
@@ -656,6 +666,7 @@
     void onReminderReconcile().catch(() => undefined);
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
+    if (selectedTaskId !== null && selectedTaskId !== task.id) return true;
     if (kind === 'complete') {
       const focusId = adjacentTaskId ?? result.nextTask?.id;
       const action = focusId === undefined ? null : document.getElementById(`task-action-${focusId}`);
@@ -680,6 +691,7 @@
     announcement = '已移入回收站，可在回收站中恢复。';
     await tick();
     if (!isCurrentOperation(result.operationToken)) return false;
+    if (selectedTaskId !== null && selectedTaskId !== id) return true;
     if (focusId !== undefined) {
       document.getElementById(`task-action-${focusId}`)?.focus();
     } else {
@@ -727,7 +739,10 @@
       return false;
     }
 
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const region = document.querySelector<HTMLElement>('[data-scroll-region="tasks"]');
+    if (region) {
+      region.scrollTo({ top: Math.max(0, target.offsetTop - region.clientHeight / 2), behavior: 'smooth' });
+    }
     document.getElementById(`task-action-${id}`)?.focus();
     announcement = message;
     lastFocusedActivationNonce = nonce;
@@ -738,9 +753,8 @@
   }
 
   async function revealActivation(id: number, nonce: number): Promise<void> {
-    workspaceView = 'list';
+    activeDrawer = null;
     if (tasks.some((task) => task.id === id)) {
-      showTrash = false;
       searchQuery = '';
       await focusActivation(id, nonce, `已定位到任务：${id}`);
       return;
@@ -751,7 +765,7 @@
       deleted = await loadTrash();
     } catch (cause) {
       if (activationNonce === nonce) {
-        showTrash = true;
+        openTaskDrawer('trash');
         scheduleActivationRetry(nonce);
         announcement = `无法读取回收站，暂时无法定位任务：${errorMessage(cause)}`;
         searchInput?.focus();
@@ -765,7 +779,7 @@
     }
 
     if (deleted.some((task) => task.id === id)) {
-      showTrash = true;
+      openTaskDrawer('trash');
       searchQuery = '';
       await focusActivation(id, nonce, `任务 ${id} 已在回收站，可恢复。`);
     } else {
@@ -782,11 +796,6 @@
     writePreference(STATUS_FILTER_STORAGE_KEY, statusFilter);
     writePreference(EXECUTION_VIEW_STORAGE_KEY, executionView);
     writePreference(PROJECT_SELECTION_STORAGE_KEY, String(selectedProject));
-    writePreference(WORKSPACE_VIEW_STORAGE_KEY, workspaceView);
-  });
-
-  $effect(() => {
-    if (showTrash) workspaceView = 'list';
   });
 
   $effect(() => {
@@ -804,6 +813,10 @@
     if (typeof window !== 'undefined' && activationRetryTimer !== undefined) {
       window.clearTimeout(activationRetryTimer);
       activationRetryTimer = undefined;
+    }
+    if (typeof window !== 'undefined' && completionFeedbackTimer !== undefined) {
+      window.clearTimeout(completionFeedbackTimer);
+      completionFeedbackTimer = undefined;
     }
   });
 
@@ -836,189 +849,72 @@
   });
 </script>
 
-<section class="workspace" aria-labelledby="tasks-heading">
-  <div class="heading"><div><p class="eyebrow">任务工作区</p><h2 id="tasks-heading">{showTrash ? '回收站' : activeWorkspaceView === 'week' ? '安排这一周' : '今天要推进什么？'}</h2></div>{#if tauriAvailable}<button class="quiet" onclick={load} disabled={loading || trashLoading}>{(loading || trashLoading) ? '刷新中…' : '刷新'}</button>{/if}</div>
-  <div class="workspace-tools">
-    <label class="search-label" for="task-search">搜索任务</label>
-    <input bind:this={searchInput} id="task-search" class="search-input" bind:value={searchQuery} placeholder="搜索标题或备注" autocomplete="off" />
-    {#if !compact && !showTrash}
-      <div class="workspace-views" role="group" aria-label="工作区视图">
-        <button type="button" class:active={activeWorkspaceView === 'list'} aria-pressed={activeWorkspaceView === 'list'} onclick={() => setWorkspaceView('list')}>列表</button>
-        <button type="button" class:active={activeWorkspaceView === 'week'} aria-pressed={activeWorkspaceView === 'week'} onclick={() => setWorkspaceView('week')}>周计划</button>
-      </div>
-    {/if}
-    {#if !compact}<button class="quiet" onclick={toggleTrash} disabled={trashLoading}>{showTrash ? '返回任务' : `回收站${deletedTasks.length ? ` (${deletedTasks.length})` : ''}`}</button>{/if}
-  </div>
-  <p class="sr-only" aria-live="polite">{announcement}</p>
-
-  {#if !initialized}<p class="muted">正在初始化任务工作区…</p>
-  {:else if !tauriAvailable}<p class="notice" role="status">浏览器预览已禁用任务持久化；请在桌面应用中管理任务。</p>
-  {:else}
-    {#if !showTrash && !compact && activeWorkspaceView === 'list'}
-    <div class="filters" aria-label="任务筛选">
-      <div class="execution-views" role="group" aria-label="执行视图">
-        <button type="button" class:active={executionView === 'inbox'} aria-pressed={executionView === 'inbox'} onclick={() => executionView = 'inbox'}>收件箱</button>
-        <button type="button" class:active={executionView === 'today'} aria-pressed={executionView === 'today'} onclick={() => executionView = 'today'}>今日</button>
-        <button type="button" class:active={executionView === 'overdue'} aria-pressed={executionView === 'overdue'} onclick={() => executionView = 'overdue'}>逾期</button>
-        <button type="button" class:active={executionView === 'upcoming'} aria-pressed={executionView === 'upcoming'} onclick={() => executionView = 'upcoming'}>即将到来</button>
-        <button type="button" class:active={executionView === 'all'} aria-pressed={executionView === 'all'} onclick={() => executionView = 'all'}>全部</button>
-      </div>
-      <label>状态
-        <select bind:value={statusFilter}>
-          <option value="all">全部</option>
-          <option value="active">进行中</option>
-          <option value="completed">已完成</option>
-        </select>
-      </label>
+<section class="task-scene" aria-labelledby="tasks-heading">
+  <header class="scene-header">
+    <div class="scene-heading"><div><p class="eyebrow">任务场景</p><h2 id="tasks-heading">今天要推进什么？</h2></div>{#if tauriAvailable}<button class="quiet" onclick={load} disabled={loading || trashLoading}>{(loading || trashLoading) ? '刷新中…' : '刷新'}</button>{/if}</div>
+    <div class="scene-tools">
+      <label class="search-label" for="task-search">搜索任务</label>
+      <input bind:this={searchInput} id="task-search" class="search-input" bind:value={searchQuery} placeholder="搜索标题或备注" autocomplete="off" />
+      <button type="button" onclick={() => openTaskDrawer('create')}>详细新建</button><button type="button" onclick={() => openTaskDrawer('filters')}>筛选</button><button type="button" onclick={() => openTaskDrawer('projects')}>项目</button><button type="button" onclick={() => openTaskDrawer('planner')}>周计划</button><button type="button" onclick={() => openTaskDrawer('trash')} disabled={trashLoading}>回收站{deletedTasks.length ? ` (${deletedTasks.length})` : ''}</button>
     </div>
-    {/if}
-    {#if compact && !showTrash}<p class="filter-note">紧凑模式固定显示今天的进行中任务；通知激活的任务会临时保留在列表中。</p>{/if}
-    {#if showTrash}<p class="filter-note">回收站中的任务不会参与提醒；恢复后会回到正常任务列表。</p>{/if}
-
-    {#if !compact && !showTrash}
-      <ProjectSidebar
-        {projects}
-        tasks={tasks}
-        {selectedProject}
-        disabled={loading || createBusy}
-        onSelect={selectProject}
-        onCreate={createProject}
-        onRename={renameProject}
-        onArchive={archiveProject}
-        onRestore={restoreProject}
-      />
-      {#if activeWorkspaceView === 'list'}
-      <TaskComposer tauriAvailable={tauriAvailable} disabled={createBusy || selectedProjectIsArchived} onCreate={handleComposerCreate} />
-      <details class="new-task-details">
-        <summary>使用详细字段创建任务</summary>
-        <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-          <div class="form-header"><div><h3>详细任务</h3><p class="form-project">归属：{selectedProject === 'all' ? '收件箱' : selectedProject === 'inbox' ? '收件箱' : selectedProjectRecord?.name ?? '收件箱'}</p></div><button type="submit" disabled={createBusy || selectedProjectIsArchived}>{createBusy ? '添加中…' : '添加任务'}</button></div>
-        {#if selectedProjectIsArchived}<p class="error" role="alert">当前项目已归档；恢复项目或切换到收件箱后才能创建任务。</p>{/if}
-        <label for="new-title">标题</label>
-        <input
-          bind:this={titleInput}
-          id="new-title"
-          bind:value={title}
-          placeholder="例如：整理发布清单"
-          aria-invalid={Boolean(createErrors.title)}
-          aria-describedby={createErrors.title ? 'new-title-error' : undefined}
-          oninput={() => clearCreateError('title')}
-          disabled={createBusy}
-        />
-        {#if createErrors.title}<p class="error" id="new-title-error">{createErrors.title}</p>{/if}
-        <label for="new-notes">备注 <span>可选</span></label>
-        <textarea
-          id="new-notes"
-          bind:value={notes}
-          placeholder="补充上下文、下一步或链接"
-          aria-invalid={Boolean(createErrors.notes)}
-          aria-describedby={createErrors.notes ? 'new-notes-error' : undefined}
-          oninput={() => clearCreateError('notes')}
-          disabled={createBusy}
-        ></textarea>
-        {#if createErrors.notes}<p class="error" id="new-notes-error">{createErrors.notes}</p>{/if}
-        <label for="new-planned">计划日期 <span>可选</span></label>
-        <input
-          id="new-planned"
-          type="date"
-          bind:value={plannedDate}
-          aria-invalid={Boolean(createErrors.plannedDate)}
-          aria-describedby={createErrors.plannedDate ? 'new-planned-error' : undefined}
-          oninput={() => clearCreateError('plannedDate')}
-          disabled={createBusy}
-        />
-        {#if createErrors.plannedDate}<p class="error" id="new-planned-error">{createErrors.plannedDate}</p>{/if}
-        <label for="new-due">截止时间 <span>可选</span></label>
-        <input
-          id="new-due"
-          type="datetime-local"
-          bind:value={dueAt}
-          aria-invalid={Boolean(createErrors.dueAtUnixMs)}
-          aria-describedby={createErrors.dueAtUnixMs ? 'new-due-error' : undefined}
-          oninput={() => clearCreateError('dueAtUnixMs')}
-          disabled={createBusy}
-        />
-        {#if createErrors.dueAtUnixMs}<p class="error" id="new-due-error">{createErrors.dueAtUnixMs}</p>{/if}
-        <label for="new-reminder">提醒时间 <span>可选</span></label>
-        <input
-          id="new-reminder"
-          type="datetime-local"
-          bind:value={reminderAt}
-          aria-invalid={Boolean(createErrors.reminderAtUnixMs)}
-          aria-describedby={createErrors.reminderAtUnixMs ? 'new-reminder-error' : undefined}
-          oninput={() => clearCreateError('reminderAtUnixMs')}
-          disabled={createBusy}
-        />
-        {#if createErrors.reminderAtUnixMs}<p class="error" id="new-reminder-error">{createErrors.reminderAtUnixMs}</p>{/if}
-        <label for="new-priority">优先级</label>
-        <select
-          id="new-priority"
-          bind:value={priority}
-          aria-invalid={Boolean(createErrors.priority)}
-          aria-describedby={createErrors.priority ? 'new-priority-error' : undefined}
-          onchange={() => clearCreateError('priority')}
-          disabled={createBusy}
-        >{#each PRIORITY_OPTIONS as option}<option value={option.value}>{option.label}</option>{/each}</select>
-        {#if createErrors.priority}<p class="error" id="new-priority-error">{createErrors.priority}</p>{/if}
-        <label for="new-recurrence">重复</label>
-        <select
-          id="new-recurrence"
-          bind:value={recurrenceKind}
-          aria-invalid={Boolean(createErrors.recurrenceKind || createErrors.recurrenceTimezone)}
-          aria-describedby={createErrors.recurrenceKind ? 'new-recurrence-error' : createErrors.recurrenceTimezone ? 'new-recurrence-timezone-error' : undefined}
-          onchange={handleCreateRecurrenceChange}
-          disabled={createBusy}
-        >{#each RECURRENCE_OPTIONS as option}<option value={option.value}>{option.label}</option>{/each}</select>
-        {#if createErrors.recurrenceKind}<p class="error" id="new-recurrence-error">{createErrors.recurrenceKind}</p>{/if}
-        {#if createErrors.recurrenceTimezone}<p class="error" id="new-recurrence-timezone-error">{createErrors.recurrenceTimezone}</p>{/if}
-        {#if recurrenceKind !== 'none'}<p class="field-note">将按 {recurrenceTimezone ?? localTimeZone()} 的本地日历生成后续实例。</p>{/if}
-          {#if createRequestError}<p class="error" role="alert">{createRequestError}</p>{/if}
-        </form>
-      </details>
-      {/if}
-    {:else if compact}
-      <p class="compact-note">切换到完整模式可创建任务、编辑字段和调整筛选。</p>
-    {/if}
-
-    {#if showTrash}
-      {#if trashLoadError}<div class="load-error" role="alert"><span>回收站未能加载：{trashLoadError}</span><button onclick={load} disabled={trashLoading}>{trashLoading ? '重试中…' : '重试'}</button></div>
-      {:else if trashLoading}<p class="muted">正在读取回收站…</p>
-      {:else if deletedTasks.length === 0}<p class="empty">回收站是空的。</p>
-      {:else if visibleTasks.length === 0}<p class="empty">当前搜索没有匹配的已删除任务。</p>
-      {:else}
-        <section class="task-group trash-group" aria-labelledby="trash-heading"><h3 id="trash-heading">已删除 <span>{visibleTasks.length}</span></h3>
-          {#each visibleTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} trashMode={true} onUpdate={handleUpdate} onCompleted={handleCompleted} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />{/each}
-        </section>
-      {/if}
-    {:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>
-    {:else if loading}<p class="muted">正在读取任务…</p>
-    {:else if activeWorkspaceView === 'week'}
-      <WeekPlanner
-        tasks={plannerTasks}
-        {projects}
-        weekStart={plannerWeekStart}
-        today={currentLocalDate}
-        onWeekChange={setPlannerWeekStart}
-        onReschedule={handlePlannerReschedule}
-        onOpenTask={openPlannerTaskInList}
-      />
-    {:else if tasks.length === 0}<p class="empty">还没有任务。从上方写下第一件要推进的事。</p>
-    {:else if visibleTasks.length === 0}<p class="empty">当前筛选没有匹配任务。</p>
-    {:else}
-      {#if activeTasks.length || statusFilter !== 'completed'}
-        <section class="task-group" aria-labelledby="active-heading"><h3 id="active-heading">进行中 <span>{activeTasks.length}</span></h3>
-          {#if activeTasks.length}{#each activeTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} pomodoroCount={pomodoroCounts.get(task.id) ?? 0} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的进行中任务。</p>{/if}
-        </section>
-      {/if}
-      {#if completedTasks.length || statusFilter !== 'active'}
-        <section class="task-group completed" aria-labelledby="completed-heading"><h3 id="completed-heading">已完成 <span>{completedTasks.length}</span></h3>
-          {#if completedTasks.length}{#each completedTasks as task (task.id)}<TaskItem {task} {projects} highlighted={task.id === activationId} compactMode={compact} pomodoroCount={pomodoroCounts.get(task.id) ?? 0} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />{/each}{:else}<p class="muted">目前没有匹配的已完成任务。</p>{/if}
-        </section>
-      {/if}
-    {/if}
+  </header>
+  <section class="quick-capture" aria-label="快速捕获">
+    {#if tauriAvailable}<TaskComposer {tauriAvailable} disabled={createBusy || selectedProjectIsArchived} onCreate={handleComposerCreate} />{:else}<p class="notice" role="status">浏览器预览已禁用任务持久化；请在桌面应用中管理任务。</p>{/if}
+  </section>
+  <p class="sr-only" aria-live="polite">{announcement}</p>
+  {#if !initialized}<p class="muted">正在初始化任务场景…</p>{:else if loadError}<div class="load-error" role="alert"><span>任务未能加载：{loadError}</span><button onclick={load} disabled={loading}>{loading ? '重试中…' : '重试'}</button></div>{:else if loading}<p class="muted">正在读取任务…</p>{:else if tauriAvailable}
+    <TaskCanvas activeTasks={activeTasks} completedTasks={completedTasks} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} onOpenDetails={(taskId) => { selectedTaskId = taskId; }} onFocus={onStartFocus} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />
   {/if}
+  {#key completionFeedback?.id}
+    {#if completionFeedback}
+      <div class="completion-feedback" role="status" aria-live="polite">
+        <span aria-hidden="true">✦</span>
+        <span>已完成：{completionFeedback.title}</span>
+      </div>
+    {/if}
+  {/key}
 </section>
 
+<TaskDetailsDrawer open={selectedTask !== null} task={selectedTask} {projects} onClose={() => { selectedTaskId = null; }} onUpdate={handleUpdate} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} />
+
+<ContextDrawer open={activeDrawer === 'create'} drawerId="create-task-drawer" title="详细新建" onClose={closeTaskDrawer}>
+  <form class="new-task" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <div class="form-header"><div><h3>详细任务</h3><p class="form-project">归属：{selectedProject === 'all' || selectedProject === 'inbox' ? '收件箱' : selectedProjectRecord?.name ?? '收件箱'}</p></div><button type="submit" disabled={createBusy || selectedProjectIsArchived}>{createBusy ? '添加中…' : '添加任务'}</button></div>
+    {#if selectedProjectIsArchived}<p class="error" role="alert">当前项目已归档；恢复项目或切换到收件箱后才能创建任务。</p>{/if}
+    <label for="new-title">标题</label><input bind:this={titleInput} id="new-title" bind:value={title} placeholder="例如：整理发布清单" aria-invalid={Boolean(createErrors.title)} aria-describedby={createErrors.title ? 'new-title-error' : undefined} oninput={() => clearCreateError('title')} disabled={createBusy} />{#if createErrors.title}<p class="error" id="new-title-error">{createErrors.title}</p>{/if}
+    <label for="new-notes">备注 <span>可选</span></label><textarea id="new-notes" bind:value={notes} placeholder="补充上下文、下一步或链接" aria-invalid={Boolean(createErrors.notes)} aria-describedby={createErrors.notes ? 'new-notes-error' : undefined} oninput={() => clearCreateError('notes')} disabled={createBusy}></textarea>{#if createErrors.notes}<p class="error" id="new-notes-error">{createErrors.notes}</p>{/if}
+    <label for="new-planned">计划日期 <span>可选</span></label><input id="new-planned" type="date" bind:value={plannedDate} aria-invalid={Boolean(createErrors.plannedDate)} aria-describedby={createErrors.plannedDate ? 'new-planned-error' : undefined} oninput={() => clearCreateError('plannedDate')} disabled={createBusy} />{#if createErrors.plannedDate}<p class="error" id="new-planned-error">{createErrors.plannedDate}</p>{/if}
+    <label for="new-due">截止时间 <span>可选</span></label><input id="new-due" type="datetime-local" bind:value={dueAt} aria-invalid={Boolean(createErrors.dueAtUnixMs)} aria-describedby={createErrors.dueAtUnixMs ? 'new-due-error' : undefined} oninput={() => clearCreateError('dueAtUnixMs')} disabled={createBusy} />{#if createErrors.dueAtUnixMs}<p class="error" id="new-due-error">{createErrors.dueAtUnixMs}</p>{/if}
+    <label for="new-reminder">提醒时间 <span>可选</span></label><input id="new-reminder" type="datetime-local" bind:value={reminderAt} aria-invalid={Boolean(createErrors.reminderAtUnixMs)} aria-describedby={createErrors.reminderAtUnixMs ? 'new-reminder-error' : undefined} oninput={() => clearCreateError('reminderAtUnixMs')} disabled={createBusy} />{#if createErrors.reminderAtUnixMs}<p class="error" id="new-reminder-error">{createErrors.reminderAtUnixMs}</p>{/if}
+    <label for="new-priority">优先级</label><select id="new-priority" bind:value={priority} aria-invalid={Boolean(createErrors.priority)} aria-describedby={createErrors.priority ? 'new-priority-error' : undefined} onchange={() => clearCreateError('priority')} disabled={createBusy}>{#each PRIORITY_OPTIONS as option}<option value={option.value}>{option.label}</option>{/each}</select>{#if createErrors.priority}<p class="error" id="new-priority-error">{createErrors.priority}</p>{/if}
+    <label for="new-recurrence">重复</label><select id="new-recurrence" bind:value={recurrenceKind} aria-invalid={Boolean(createErrors.recurrenceKind || createErrors.recurrenceTimezone)} aria-describedby={createErrors.recurrenceKind ? 'new-recurrence-error' : createErrors.recurrenceTimezone ? 'new-recurrence-timezone-error' : undefined} onchange={handleCreateRecurrenceChange} disabled={createBusy}>{#each RECURRENCE_OPTIONS as option}<option value={option.value}>{option.label}</option>{/each}</select>{#if createErrors.recurrenceKind}<p class="error" id="new-recurrence-error">{createErrors.recurrenceKind}</p>{/if}{#if createErrors.recurrenceTimezone}<p class="error" id="new-recurrence-timezone-error">{createErrors.recurrenceTimezone}</p>{/if}{#if recurrenceKind !== 'none'}<p class="field-note">将按 {recurrenceTimezone ?? localTimeZone()} 的本地日历生成后续实例。</p>{/if}{#if createRequestError}<p class="error" role="alert">{createRequestError}</p>{/if}
+  </form>
+</ContextDrawer>
+<ContextDrawer open={activeDrawer === 'filters'} drawerId="filters-drawer" title="筛选" onClose={closeTaskDrawer}><div class="filters" aria-label="任务筛选"><div class="execution-views" role="group" aria-label="执行视图">{#each [['inbox','收件箱'],['today','今日'],['overdue','逾期'],['upcoming','即将到来'],['all','全部']] as view}<button type="button" class:active={executionView === view[0]} aria-pressed={executionView === view[0]} onclick={() => executionView = view[0] as ExecutionView}>{view[1]}</button>{/each}</div><label>状态<select bind:value={statusFilter}><option value="all">全部</option><option value="active">进行中</option><option value="completed">已完成</option></select></label></div></ContextDrawer>
+<ContextDrawer open={activeDrawer === 'projects'} drawerId="projects-drawer" title="项目" onClose={closeTaskDrawer}><ProjectSidebar {projects} tasks={tasks} {selectedProject} disabled={loading || createBusy} onSelect={selectProject} onCreate={createProject} onRename={renameProject} onArchive={archiveProject} onRestore={restoreProject} /></ContextDrawer>
+<ContextDrawer open={activeDrawer === 'planner'} drawerId="planner-drawer" title="周计划" size="wide" onClose={closeTaskDrawer}><WeekPlanner tasks={plannerTasks} {projects} weekStart={plannerWeekStart} today={currentLocalDate} onWeekChange={setPlannerWeekStart} onReschedule={handlePlannerReschedule} onOpenTask={openPlannerTaskInList} /></ContextDrawer>
+<ContextDrawer open={activeDrawer === 'trash'} drawerId="trash-drawer" title="回收站" onClose={closeTaskDrawer}>{#if trashLoadError}<div class="load-error" role="alert"><span>回收站未能加载：{trashLoadError}</span><button onclick={() => void loadTrash()} disabled={trashLoading}>{trashLoading ? '重试中…' : '重试'}</button></div>{:else if trashLoading}<p class="muted">正在读取回收站…</p>{:else}<TaskCanvas activeTasks={[]} completedTasks={[]} trashTasks={visibleDeletedTasks} {projects} {activationId} {pomodoroCounts} trashMode={true} onOpenDetails={() => undefined} onUpdate={handleUpdate} onCompleted={handleCompleted} onSnooze={handleSnooze} onDeferToTomorrow={handleDefer} onDelete={handleDelete} onChanged={handleChanged} onRemoved={handleRemoved} onRestore={handleRestore} onPermanentlyDelete={handlePermanentlyDelete} onRestored={handleRestored} onPermanentlyRemoved={handlePermanentlyRemoved} />{/if}</ContextDrawer>
+
 <style>
-  .workspace { padding:20px 0; } .workspace-tools { display:flex; align-items:center; gap:8px; padding-top:14px; } .new-task-details { margin-top:14px; border-bottom:1px solid var(--line); } .new-task-details summary { width:max-content; padding:7px 0; color:var(--muted); font-size:12px; } .new-task-details[open] summary { color:var(--text-soft); } .workspace-views { display:flex; flex:none; gap:4px; } .workspace-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; } .workspace-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); } .form-project { margin:4px 0 0; color:var(--muted); font-size:11px; } .search-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } .search-input { min-width:0; flex:1; border:1px solid var(--line); border-radius:4px; padding:7px 9px; color:inherit; background:rgba(0,0,0,.14); } .trash-group { padding-top:12px; }.heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }.eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; } h2,h3 { margin:4px 0 0; font-weight:600; } h2 { font-size:19px; } h3 { font-size:13px; }.filters { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 0 4px; border-bottom:1px solid var(--line); }.execution-views { display:flex; flex-wrap:wrap; gap:5px; }.execution-views button { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:var(--muted); background:transparent; font-size:12px; }.execution-views button.active { color:#e7eef5; border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); }.filters label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; }.filters select { border:1px solid var(--line); border-radius:4px; padding:5px 7px; color:#e7eef5; background:#171a1f; font-size:12px; }.filter-note,.compact-note,.field-note { margin:8px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }.task-group h3 { color:var(--muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }.task-group h3 span { color:#d8e1eb; }.new-task { display:grid; gap:6px; padding:18px 0; border-bottom:1px solid var(--line); }.new-task label { color:var(--muted); font-size:11px; }.new-task label span { color:#707a86; }.new-task input,.new-task textarea,.new-task select { width:100%; border:1px solid var(--line); border-radius:4px; padding:8px 9px; color:inherit; background:rgba(0,0,0,.14); }.new-task textarea { min-height:68px; resize:vertical; }.task-group { padding-top:20px; }.task-group.completed { margin-top:8px; }.muted,.empty { color:var(--muted); font-size:12px; line-height:1.55; }.empty { padding:25px 0; border-bottom:1px solid var(--line); }.notice,.load-error { margin:16px 0; padding:10px 11px; color:#d9c08f; background:rgba(224,173,101,.09); border-left:2px solid #e0ad65; font-size:12px; }.load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#ffcece; border-color:#db7777; }.quiet { border:0; padding:4px 6px; color:var(--muted); background:transparent; font-size:12px; }.error { margin:2px 0; color:#ffaeae; font-size:12px; }.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; } button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
+  .task-scene { position:relative; height:100%; min-height:0; display:grid; grid-template-rows:auto auto minmax(0,1fr); container-type:inline-size; }
+  .scene-header { display:grid; min-width:0; }
+  .scene-heading,.form-header { display:flex; align-items:start; justify-content:space-between; gap:12px; }
+  .scene-tools { display:flex; align-items:center; gap:8px; padding:14px 0; min-width:0; }
+  .quick-capture { min-width:0; }
+  .scene-tools button { flex:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:7px 8px; color:var(--text-soft); background:transparent; font-size:12px; }
+  .scene-tools button:hover:not(:disabled) { border-color:var(--text-soft); background:var(--surface-hover); color:var(--text); }
+  .search-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+  .search-input { min-width:0; flex:1; border:1px solid var(--line); border-radius:var(--radius-sm); padding:7px 9px; color:inherit; background:rgba(0,0,0,.14); }
+  .eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; }
+  h2,h3 { margin:4px 0 0; font-weight:600; } h2 { font-size:19px; } h3 { font-size:13px; }
+  .new-task { display:grid; gap:8px; padding-top:16px; } .new-task label { color:var(--muted); font-size:11px; } .new-task input,.new-task textarea,.new-task select { min-width:0; border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:8px; color:var(--text); background:var(--surface); } .new-task textarea { min-height:76px; resize:vertical; }
+  .form-project { margin:4px 0 0; color:var(--muted); font-size:11px; } .form-header button { border:1px solid var(--accent); border-radius:var(--radius-sm); padding:7px 10px; color:var(--accent-ink); background:var(--accent); font-size:12px; }
+  .filters { display:grid; gap:14px; padding-top:16px; } .execution-views { display:flex; flex-wrap:wrap; gap:5px; } .execution-views button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 8px; color:var(--muted); background:transparent; font-size:12px; } .execution-views button.active { color:var(--text); border-color:rgba(91,169,255,.65); background:rgba(91,169,255,.18); } .filters label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; } .filters select { border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 8px; color:var(--text); background:var(--surface); }
+  .error { margin:0; color:var(--danger); font-size:12px; line-height:1.5; } .field-note { margin:0; color:var(--muted); font-size:11px; } .load-error { display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:14px; color:var(--danger); font-size:12px; } .load-error button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:5px 8px; color:var(--text-soft); background:transparent; }
+  .quiet { border:0; border-radius:var(--radius-sm); padding:5px 7px; color:var(--muted); background:transparent; font-size:11px; } .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+  .completion-feedback { position:absolute; right:24px; bottom:24px; z-index:15; display:flex; align-items:center; gap:8px; max-width:min(360px,calc(100% - 48px)); padding:9px 12px; border:1px solid color-mix(in srgb, var(--success) 55%, var(--line)); border-radius:999px; color:var(--success); background:color-mix(in srgb, var(--surface-raised) 92%, transparent); box-shadow:var(--shadow-overlay); pointer-events:none; animation:completion-star .4s ease-out both; }
+  .completion-feedback span:first-child { font-size:19px; }
+  @keyframes completion-star { from { opacity:0; transform:translateY(6px) scale(.94); } to { opacity:1; transform:translateY(0) scale(1); } }
+  @media (prefers-reduced-motion: reduce) { .completion-feedback { animation-name:completion-star-reduced; } @keyframes completion-star-reduced { from { opacity:0; } to { opacity:1; } } }
+  @container (max-width:640px) { .scene-tools { flex-wrap:wrap; } .search-input { flex-basis:100%; order:-1; } .scene-tools button { flex:1; } }
 </style>

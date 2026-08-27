@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import {
     errorMessage,
     parseTaskDrafts,
@@ -143,4 +143,13 @@
   .error { margin:0; color:var(--danger); font-size:12px; }
   .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
   @media (max-width:420px) { .composer-heading { align-items:flex-start; flex-direction:column; gap:7px; } .composer-actions > button { flex:1; } }
+  @media (max-height: 759px) {
+    .composer { padding: 10px 0 12px; }
+    .composer textarea { min-height: 48px; max-height: 76px; }
+    .help { display: none; }
+  }
+  @media (max-height: 559px) {
+    .composer-heading h3, .hint { display: none; }
+    .composer textarea { min-height: 38px; resize: none; }
+  }
 </style>
