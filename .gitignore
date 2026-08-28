@@ -11,3 +11,9 @@ vite.config.ts.timestamp-*
 /src-tauri/target
 /tools/**/bin
 /tools/**/obj
+/tools/**/publish
+/test-results
+/playwright-report
+/blob-report
+/.playwright
+/coverage

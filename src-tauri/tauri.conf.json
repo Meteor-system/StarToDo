@@ -1,18 +1,26 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
-  "version": "0.1.0",
+  "productName": "StarToDo",
+  "version": "0.1.2",
   "identifier": "com.aidotnet.startodo",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["startodo"]
+      }
+    }
+  },
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:notification-host && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:notification-host && npm run build",
     "frontendDist": "../build"
   },
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
+        "title": "StarToDo",
+        "visible": false,
         "width": 800,
         "height": 600
       }
@@ -23,7 +31,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": "nsis",
+    "resources": {
+      "../tools/notification-host/publish/StarToDo.NotificationHost.exe": "notification-host/StarToDo.NotificationHost.exe"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/notification-host-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
