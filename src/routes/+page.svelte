@@ -2,11 +2,14 @@
   import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import TaskWorkspace from '$lib/components/TaskWorkspace.svelte';
-  import FocusWorkspace from '$lib/components/FocusWorkspace.svelte';
+  import TaskScene from '$lib/components/TaskScene.svelte';
+  import FocusScene from '$lib/components/FocusScene.svelte';
   import FocusMiniBar from '$lib/components/FocusMiniBar.svelte';
+  import AutoImmersivePrompt from '$lib/components/AutoImmersivePrompt.svelte';
   import FloatingWindow from '$lib/components/FloatingWindow.svelte';
-  import DiagnosticsPanel from '$lib/components/DiagnosticsPanel.svelte';
+  import AppShell from '$lib/components/AppShell.svelte';
+  import DiagnosticsDrawer from '$lib/components/DiagnosticsDrawer.svelte';
+  import type { AppScene, ImmersiveDisplayState, ShellDrawer, ToastMessage } from '$lib/ui-state';
   import {
     acknowledgePendingPomodoroActivations,
     claimPendingPomodoroActivations,
@@ -34,19 +37,20 @@
     claimPendingReminderWarnings,
     reconcileReminders,
     takePendingFloatingIntent,
-    toggleFloatingWindow,
     type PendingActivation,
     type ReminderReport,
     type ReminderWarningContext,
     type ReminderWarningEvent
   } from '$lib/tasks';
-
-  type WindowMode = 'compact' | 'full';
-  type AppView = 'tasks' | 'focus';
+  import {
+    readUiPreferences,
+    writeAutoImmersivePreference,
+    type AutoImmersivePreference
+  } from '$lib/ui-preferences';
+  import { enterImmersiveMode, exitImmersiveMode, toggleFloatingWindow } from '$lib/windowing';
   type JsonPrimitive = string | number | boolean | null;
   type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
   type JsonRecord = { [key: string]: JsonValue };
-  interface WindowPreferences { mode: WindowMode; width: number; height: number; alwaysOnTop: boolean; }
   interface DisplayReminderWarning extends ReminderWarningContext { id: string; }
   interface UiReadyRegistration {
     runtimeSnapshot: JsonRecord;
@@ -65,7 +69,6 @@
   let reminderWarningListenerToken = $state<number | null>(null);
   let initialized = $state(false);
   let runtimeSnapshot = $state<JsonRecord | null>(null);
-  let windowMode = $state<WindowMode>('full');
   let alwaysOnTop = $state(false);
   let notificationActivationId = $state<number | null>(null);
   let notificationActivationNonce = $state(0);
@@ -82,7 +85,23 @@
   let floatingWindowError = $state<string | null>(null);
   let reminderReconcileSequence = 0;
   let inFlightReminderReconcile: Promise<ReminderReport> | null = null;
-  let activeView = $state<AppView>('tasks');
+  let activeScene = $state<AppScene>('tasks');
+  let openDrawer = $state<ShellDrawer>(null);
+  let uiPreferences = $state(readUiPreferences());
+  let immersiveDisplay = $state<ImmersiveDisplayState>('off');
+  let pendingStartInput = $state<StartPomodoroInput | null>(null);
+  let pendingStartSessionEpoch = 0;
+  let pendingStartSessionId: number | null = null;
+  let pomodoroSessionEpoch = 0;
+  let acceptedPomodoroSessionId: number | null = null;
+  let tasksSceneHost = $state<HTMLElement>();
+  let focusSceneHost = $state<HTMLElement>();
+  let taskSceneFocusTarget: HTMLElement | null = null;
+  let focusSceneFocusTarget: HTMLElement | null = null;
+  let sceneFocusSequence = 0;
+  let immersiveIntentEpoch = 0;
+  let immersiveEnterFlight: Promise<void> | null = null;
+  let immersiveExitFlight: Promise<boolean> | null = null;
   let pomodoroSnapshot = $state<PomodoroSnapshot | null>(null);
   let pomodoroTaskSummaries = $state<PomodoroTaskSummary[]>([]);
   let pomodoroBusy = $state(false);
@@ -94,6 +113,52 @@
   let pomodoroWarning = $derived(
     pomodoroActivationWarning ?? pomodoroListenerWarning ?? pomodoroCommandWarning ?? pomodoroRefreshWarning
   );
+  let pomodoroWarningToastId = $derived(
+    pomodoroWarning === null ? null : `pomodoro:warning:${pomodoroWarning}`
+  );
+  let dismissedToastIds = $state<Set<string>>(new Set());
+  let toasts = $derived<ToastMessage[]>([
+    ...(reconcileWarning && !dismissedToastIds.has('reminders:reconcile') ? [{
+      id: 'reminders:reconcile',
+      tone: 'warning' as const,
+      message: `提醒同步警告：${reconcileWarning}`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast('reminders:reconcile')
+    }] : []),
+    ...mutationWarnings.filter((warning) => !dismissedToastIds.has(`reminders:mutation:${warning.id}`)).map((warning) => ({
+      id: `reminders:mutation:${warning.id}`,
+      tone: 'warning' as const,
+      message: `${warning.taskId === null ? '任务' : `任务 #${warning.taskId}`}${warningOperationLabel(warning.operation)}后提醒同步失败：${warning.message}`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast(`reminders:mutation:${warning.id}`)
+    })),
+    ...(missedCount && !dismissedToastIds.has('reminders:missed') ? [{
+      id: 'reminders:missed',
+      tone: 'warning' as const,
+      message: `有 ${missedCount} 个提醒已错过，涉及任务：${missedTaskIds.join('、')}。`,
+      actionLabel: reminderResyncBusy ? '同步中…' : '重新同步提醒',
+      onAction: resyncReminders,
+      onDismiss: () => dismissToast('reminders:missed')
+    }] : []),
+    ...(floatingWindowError && !dismissedToastIds.has('floating-window:error') ? [{
+      id: 'floating-window:error',
+      tone: 'danger' as const,
+      message: floatingWindowError,
+      onDismiss: () => dismissToast('floating-window:error')
+    }] : []),
+    ...(pomodoroWarning && pomodoroWarningToastId && !dismissedToastIds.has(pomodoroWarningToastId) ? [{
+      id: pomodoroWarningToastId,
+      tone: 'warning' as const,
+      message: pomodoroWarning,
+      onDismiss: () => dismissToast(pomodoroWarningToastId)
+    }] : [])
+  ]);
+
+  function dismissToast(id: string): void {
+    dismissedToastIds = new Set([...dismissedToastIds, id]);
+  }
   let selectedFocusTaskId = $state<number | null>(null);
   let pomodoroCounts = $derived(new Map(pomodoroTaskSummaries.map((summary) => [summary.taskId, summary.completedFocusCount])));
 
@@ -105,13 +170,22 @@
     return error instanceof Error ? error.message : String(error);
   }
 
+  function acceptPomodoroSnapshot(snapshot: PomodoroSnapshot): void {
+    const sessionId = snapshot.currentSession?.id ?? null;
+    if (sessionId !== acceptedPomodoroSessionId) {
+      acceptedPomodoroSessionId = sessionId;
+      pomodoroSessionEpoch += 1;
+    }
+    pomodoroSnapshot = snapshot;
+  }
+
   function applyPomodoroResult(result: PomodoroMutationResult): void {
-    pomodoroSnapshot = result.snapshot;
+    acceptPomodoroSnapshot(result.snapshot);
     pomodoroCommandWarning = result.notificationWarning ?? null;
   }
 
   function applyPomodoroView(view: PomodoroView): void {
-    pomodoroSnapshot = view.snapshot;
+    acceptPomodoroSnapshot(view.snapshot);
     pomodoroTaskSummaries = view.taskSummaries;
     selectedFocusTaskId = reconcilePomodoroTaskSelection(selectedFocusTaskId, view.taskSummaries);
   }
@@ -136,15 +210,15 @@
   async function runPomodoroCommand(
     command: () => Promise<PomodoroMutationResult>,
     failedTaskId: number | null = null
-  ): Promise<void> {
-    if (!tauriAvailable || pomodoroBusy) return;
+  ): Promise<boolean> {
+    if (!tauriAvailable || pomodoroBusy) return false;
     pomodoroRefreshSequence += 1;
     pomodoroBusy = true;
     try {
       const result = await command();
       pomodoroRefreshSequence += 1;
       applyPomodoroResult(result);
-      await refreshPomodoro();
+      return await refreshPomodoro();
     } catch (error) {
       const message = errorMessage(error);
       if (message === POMODORO_TASK_UNAVAILABLE_ERROR) {
@@ -154,14 +228,182 @@
       } else {
         pomodoroCommandWarning = `专注操作失败：${message}`;
       }
+      return false;
     } finally {
       pomodoroBusy = false;
     }
   }
 
+  async function enterImmersiveDisplay(intentToken?: number): Promise<void> {
+    if (immersiveEnterFlight !== null) return immersiveEnterFlight;
+    const token = intentToken ?? ++immersiveIntentEpoch;
+
+    const flight = (async () => {
+      if (immersiveExitFlight !== null) {
+        if (!await immersiveExitFlight) return;
+      }
+      if (
+        token !== immersiveIntentEpoch ||
+        activeScene !== 'focus' ||
+        immersiveDisplay !== 'off'
+      ) return;
+
+      if (!tauriAvailable) {
+        immersiveDisplay = 'visual-fallback';
+        return;
+      }
+
+      try {
+        await enterImmersiveMode();
+        immersiveDisplay = 'system';
+      } catch (cause) {
+        immersiveDisplay = 'visual-fallback';
+        pomodoroCommandWarning = `系统全屏不可用，已改用窗口内沉浸：${errorMessage(cause)}`;
+      }
+    })();
+    immersiveEnterFlight = flight;
+    try {
+      await flight;
+    } finally {
+      if (immersiveEnterFlight === flight) immersiveEnterFlight = null;
+    }
+  }
+
+  async function exitImmersiveDisplay(advanceIntent = true): Promise<boolean> {
+    if (advanceIntent) immersiveIntentEpoch += 1;
+    if (immersiveEnterFlight !== null) await immersiveEnterFlight;
+    if (immersiveExitFlight !== null) return immersiveExitFlight;
+
+    const flight = (async () => {
+      if (immersiveDisplay === 'system') {
+        try {
+          await exitImmersiveMode();
+        } catch (cause) {
+          pomodoroCommandWarning = `退出系统全屏失败：${errorMessage(cause)}`;
+          return false;
+        }
+      }
+
+      immersiveDisplay = 'off';
+      return true;
+    })();
+    immersiveExitFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (immersiveExitFlight === flight) immersiveExitFlight = null;
+    }
+  }
+
+  async function startPomodoroAndMaybeImmerse(
+    input: StartPomodoroInput,
+    immerse: boolean
+  ): Promise<void> {
+    if (pomodoroBusy) return;
+    const enterIntentToken = immerse ? ++immersiveIntentEpoch : null;
+    const started = await runPomodoroCommand(
+      () => startPomodoro(input),
+      input.taskId
+    );
+
+    if (
+      started &&
+      enterIntentToken !== null &&
+      enterIntentToken === immersiveIntentEpoch &&
+      activeScene === 'focus'
+    ) await enterImmersiveDisplay(enterIntentToken);
+  }
+
+  function requestPomodoroStart(input: StartPomodoroInput): void {
+    if (input.phase !== 'focus') {
+      void startPomodoroAndMaybeImmerse(input, false);
+      return;
+    }
+
+    if (uiPreferences.autoImmersive === 'unset') {
+      pendingStartInput = input;
+      pendingStartSessionEpoch = pomodoroSessionEpoch;
+      pendingStartSessionId = pomodoroSnapshot?.currentSession?.id ?? null;
+      return;
+    }
+
+    void startPomodoroAndMaybeImmerse(
+      input,
+      uiPreferences.autoImmersive === 'enabled'
+    );
+  }
+
+  function changeAutoImmersivePreference(value: AutoImmersivePreference): void {
+    uiPreferences = { ...uiPreferences, autoImmersive: value };
+    writeAutoImmersivePreference(value);
+  }
+
+  function chooseAutoImmersivePreference(
+    preference: 'enabled' | 'disabled'
+  ): void {
+    const input = pendingStartInput;
+    const sessionEpoch = pendingStartSessionEpoch;
+    const sessionId = pendingStartSessionId;
+    pendingStartInput = null;
+    changeAutoImmersivePreference(preference);
+    if (
+      input !== null &&
+      sessionEpoch === pomodoroSessionEpoch &&
+      (pomodoroSnapshot?.currentSession?.id ?? null) === sessionId
+    ) {
+      void startPomodoroAndMaybeImmerse(input, preference === 'enabled');
+    }
+  }
+
+  function sceneHost(scene: AppScene): HTMLElement | undefined {
+    return scene === 'tasks' ? tasksSceneHost : focusSceneHost;
+  }
+
+  function focusedSceneElement(scene: AppScene): HTMLElement | null {
+    const host = sceneHost(scene);
+    const activeElement = document.activeElement;
+    return activeElement instanceof HTMLElement && host?.contains(activeElement) ? activeElement : null;
+  }
+
+  function rememberSceneFocus(scene: AppScene, target: HTMLElement): void {
+    if (scene === 'tasks') taskSceneFocusTarget = target;
+    else focusSceneFocusTarget = target;
+  }
+
+  function firstSceneControl(scene: AppScene): HTMLElement | null {
+    return sceneHost(scene)?.querySelector<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    ) ?? null;
+  }
+
+  function savedSceneFocus(scene: AppScene): HTMLElement | null {
+    return scene === 'tasks' ? taskSceneFocusTarget : focusSceneFocusTarget;
+  }
+
+  async function changeScene(scene: AppScene): Promise<void> {
+    const focusSequence = ++sceneFocusSequence;
+    if (scene === activeScene) return;
+    const outgoingScene = activeScene;
+    const outgoingFocusTarget = focusedSceneElement(outgoingScene);
+    if (scene === 'tasks') {
+      immersiveIntentEpoch += 1;
+      if (immersiveDisplay !== 'off' || immersiveEnterFlight !== null || immersiveExitFlight !== null) {
+        if (!await exitImmersiveDisplay(false)) return;
+      }
+    }
+    if (focusSequence !== sceneFocusSequence) return;
+    if (outgoingFocusTarget !== null) rememberSceneFocus(outgoingScene, outgoingFocusTarget);
+    activeScene = scene;
+    await tick();
+    if (focusSequence !== sceneFocusSequence || activeScene !== scene || outgoingFocusTarget === null) return;
+    const savedTarget = savedSceneFocus(scene);
+    if (savedTarget?.isConnected && sceneHost(scene)?.contains(savedTarget)) savedTarget.focus();
+    else firstSceneControl(scene)?.focus();
+  }
+
   function selectFocusTask(taskId: number): void {
     selectedFocusTaskId = taskId;
-    activeView = 'focus';
+    void changeScene('focus');
   }
 
   function handlePomodoroTasksChanged(unavailableTaskId?: number): void {
@@ -187,12 +429,14 @@
   ): Promise<void> {
     if (isDisposed()) return;
     if (intent.view === 'focus') {
-      activeView = 'focus';
+      await changeScene('focus');
+      if (isDisposed() || activeScene !== 'focus') return;
       await refreshPomodoro(isDisposed);
       return;
     }
     if (intent.view === 'tasks' && intent.taskId !== null) {
-      activeView = 'tasks';
+      await changeScene('tasks');
+      if (isDisposed() || activeScene !== 'tasks') return;
       const nonce = handleActivationId(intent.taskId);
       if (nonce !== null) await tick();
     }
@@ -383,8 +627,8 @@
           return;
         }
 
-        activeView = 'focus';
-        if (!await refreshPomodoro(isDisposed) || isDisposed()) return;
+        await changeScene('focus');
+        if (isDisposed() || activeScene !== 'focus' || !await refreshPomodoro(isDisposed)) return;
 
         const result = await acknowledgePendingPomodoroActivations(uiRunId, [activation.id]);
         if (isDisposed()) return;
@@ -444,10 +688,6 @@
     return flight;
   }
 
-  function handleModeChange(mode: WindowMode): void {
-    windowMode = mode;
-  }
-
   async function resyncReminders(): Promise<void> {
     if (!tauriAvailable) return;
     reminderResyncBusy = true;
@@ -469,6 +709,16 @@
     } finally {
       floatingWindowBusy = false;
     }
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (
+      event.defaultPrevented ||
+      event.key !== 'Escape' ||
+      (immersiveDisplay === 'off' && immersiveEnterFlight === null && immersiveExitFlight === null)
+    ) return;
+    event.preventDefault();
+    void exitImmersiveDisplay();
   }
 
   onMount(() => {
@@ -629,18 +879,6 @@
       if (!disposed) await registerReminderWarningListener();
     })();
 
-    void (async () => {
-      try {
-        const preferences = await invoke<WindowPreferences>('get_window_preferences');
-        if (!disposed) {
-          windowMode = preferences.mode;
-          alwaysOnTop = preferences.alwaysOnTop;
-        }
-      } catch (error) {
-        if (!disposed) notificationActivationError = `窗口偏好读取失败：${errorMessage(error)}`;
-      }
-    })();
-
     return () => {
       disposed = true;
       activationPageDisposed = true;
@@ -672,66 +910,75 @@
 </script>
 
 <svelte:head><meta name="theme-color" content="#1d2025" /></svelte:head>
+<svelte:window onkeydown={handleWindowKeydown} />
 
 {#if windowKind === 'floating'}
   <FloatingWindow {tauriAvailable} />
 {:else}
-<main aria-labelledby="page-title">
-  <header class="topbar">
-    <div class="identity"><span class="mark" aria-hidden="true"></span><div><p class="eyebrow">STAR TODO</p><h1 id="page-title">{activeView === 'focus' ? '专注' : '任务'}</h1></div></div>
-    <div class="shell-actions">
-      <p class="status" aria-live="polite"><span class:offline={!tauriAvailable} class="status-dot"></span>{#if !initialized}正在初始化{:else if tauriAvailable}已连接{:else}浏览器预览{/if}</p>
-      <button type="button" onclick={handleToggleFloatingWindow} disabled={!tauriAvailable || floatingWindowBusy}>
-        {floatingWindowBusy ? '…' : '悬浮窗'}
-      </button>
-      {#if floatingWindowError}<p class="error" role="alert">{floatingWindowError}</p>{/if}
-    </div>
-  </header>
-  {#if reconcileWarning || mutationWarnings.length || missedCount}
-    <section class="page-alert" aria-live="polite">
-      {#if reconcileWarning}<p>提醒同步警告：{reconcileWarning}</p>{/if}
-      {#each mutationWarnings as warning (warning.id)}
-        <p>{warning.taskId === null ? '任务' : `任务 #${warning.taskId}`}{warningOperationLabel(warning.operation)}后提醒同步失败：{warning.message}</p>
-      {/each}
-      {#if missedCount}<p>有 {missedCount} 个提醒已错过，涉及任务：{missedTaskIds.join('、')}。</p>{/if}
-      <button onclick={resyncReminders} disabled={reminderResyncBusy}>{reminderResyncBusy ? '同步中…' : '重新同步提醒'}</button>
-    </section>
-  {/if}
-  {#if (windowMode === 'compact' && activeView === 'tasks') || (tauriAvailable && activeView === 'tasks')}
+<AppShell
+  activeScene={activeScene}
+  {openDrawer}
+  {immersiveDisplay}
+  {initialized}
+  {tauriAvailable}
+  {toasts}
+  onSceneChange={changeScene}
+  onOpenDiagnostics={() => openDrawer = 'diagnostics'}
+  onCloseDrawer={() => openDrawer = null}
+  onToggleFloating={handleToggleFloatingWindow}
+>
+  {#snippet children()}
+  {#if tauriAvailable && activeScene === 'tasks'}
     <FocusMiniBar
       {tauriAvailable}
       snapshot={pomodoroSnapshot}
-      compact={windowMode === 'compact'}
       busy={pomodoroBusy}
       warning={pomodoroWarning}
-      onOpenFocus={() => activeView = 'focus'}
-      onPause={() => runPomodoroCommand(pausePomodoro)}
-      onResume={() => runPomodoroCommand(resumePomodoro)}
+      onOpenFocus={() => { void changeScene('focus'); }}
+      onPause={() => { void runPomodoroCommand(pausePomodoro); }}
+      onResume={() => { void runPomodoroCommand(resumePomodoro); }}
     />
   {/if}
 
-  {#if activeView === 'focus'}
-    <FocusWorkspace
+  <div
+    class="scene-host"
+    class:active={activeScene === 'focus'}
+    bind:this={focusSceneHost}
+    hidden={activeScene !== 'focus'}
+    inert={activeScene !== 'focus'}
+    aria-hidden={activeScene !== 'focus' ? 'true' : undefined}
+  >
+    <FocusScene
       {tauriAvailable}
       snapshot={pomodoroSnapshot}
       tasks={pomodoroTaskSummaries}
       bind:selectedTaskId={selectedFocusTaskId}
       busy={pomodoroBusy}
       warning={pomodoroWarning}
-      onStart={(input: StartPomodoroInput) => runPomodoroCommand(() => startPomodoro(input), input.taskId)}
-      onPause={() => runPomodoroCommand(pausePomodoro)}
-      onResume={() => runPomodoroCommand(resumePomodoro)}
-      onSkip={() => runPomodoroCommand(skipPomodoro)}
-      onReset={() => runPomodoroCommand(resetPomodoro)}
-      onUpdateSettings={(input: UpdatePomodoroSettingsInput) => runPomodoroCommand(() => updatePomodoroSettings(input))}
+      immersive={immersiveDisplay !== 'off'}
+      onReturnToTasks={() => changeScene('tasks')}
+      onEnterImmersive={() => { void enterImmersiveDisplay(); }}
+      onExitImmersive={() => { void exitImmersiveDisplay(); }}
+      onStart={requestPomodoroStart}
+      onPause={() => { void runPomodoroCommand(pausePomodoro); }}
+      onResume={() => { void runPomodoroCommand(resumePomodoro); }}
+      onSkip={() => { void runPomodoroCommand(skipPomodoro); }}
+      onReset={() => { void runPomodoroCommand(resetPomodoro); }}
+      onUpdateSettings={(input: UpdatePomodoroSettingsInput) => { void runPomodoroCommand(() => updatePomodoroSettings(input)); }}
     />
-  {/if}
+  </div>
 
-  {#if activeView === 'tasks' || windowMode === 'compact'}
-    <TaskWorkspace
+  <div
+    class="scene-host"
+    class:active={activeScene === 'tasks'}
+    bind:this={tasksSceneHost}
+    hidden={activeScene !== 'tasks'}
+    inert={activeScene !== 'tasks'}
+    aria-hidden={activeScene !== 'tasks' ? 'true' : undefined}
+  >
+    <TaskScene
       {tauriAvailable}
       {initialized}
-      compact={windowMode === 'compact'}
       activationId={notificationActivationId}
       activationNonce={notificationActivationNonce}
       {pomodoroCounts}
@@ -741,28 +988,34 @@
       onMutationWarning={handleMutationWarning}
       onActivationResolved={acknowledgeResolvedActivation}
     />
-  {/if}
-  <nav class="primary-nav" aria-label="主导航">
-    <button type="button" class:active={activeView === 'tasks'} aria-current={activeView === 'tasks' ? 'page' : undefined} onclick={() => activeView = 'tasks'}>任务</button>
-    <button type="button" class:active={activeView === 'focus'} aria-current={activeView === 'focus' ? 'page' : undefined} onclick={() => activeView = 'focus'}>专注</button>
-  </nav>
-  <DiagnosticsPanel
-    {tauriAvailable}
-    {uiRunId}
-    mode={windowMode}
-    initialAlwaysOnTop={alwaysOnTop}
-    activationId={notificationActivationId}
-    activationError={notificationActivationError}
-    initialSnapshot={runtimeSnapshot}
-    {latestReminderReport}
-    {reminderSyncedAt}
-    {reminderWarningListenerToken}
-    onModeChange={handleModeChange}
-    onReminderReconcile={requestReminderReconcile}
-  />
-</main>
+  </div>
+  {/snippet}
+  {#snippet diagnosticsContent()}
+  <DiagnosticsDrawer
+      {tauriAvailable}
+      {uiRunId}
+      initialAlwaysOnTop={alwaysOnTop}
+      activationId={notificationActivationId}
+      activationError={notificationActivationError}
+      initialSnapshot={runtimeSnapshot}
+      {latestReminderReport}
+      {reminderSyncedAt}
+      {reminderWarningListenerToken}
+      autoImmersivePreference={uiPreferences.autoImmersive}
+      onAutoImmersivePreferenceChange={changeAutoImmersivePreference}
+      onReminderReconcile={requestReminderReconcile}
+    />
+  {/snippet}
+</AppShell>
+<AutoImmersivePrompt
+  open={pendingStartInput !== null}
+  onChoose={chooseAutoImmersivePreference}
+  onCancel={() => pendingStartInput = null}
+/>
 {/if}
 
 <style>
-  main { position:relative; width:min(100%, 920px); min-height:100vh; margin:0 auto; padding:18px clamp(14px, 4vw, 36px) 26px; background:linear-gradient(135deg, rgba(31,34,39,.88), rgba(17,18,20,.98)); border-inline:1px solid rgba(255,255,255,.05); }.topbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-bottom:50px; border-bottom:1px solid var(--line); }.identity,.shell-actions,.status { display:flex; align-items:center; }.identity { gap:11px; }.shell-actions { gap:16px; }.shell-actions button { border:1px solid var(--line); border-radius:var(--radius-sm); padding:5px 8px; color:var(--text-soft); background:var(--surface); font-size:12px; }.shell-actions button:hover:not(:disabled) { border-color:var(--text-soft); background:var(--surface-hover); color:var(--text); }.shell-actions .error { margin:0; color:var(--danger); font-size:11px; }.mark { width:9px; height:9px; border-radius:50%; background:var(--info); box-shadow:0 0 16px rgba(91,169,255,.62); }.eyebrow { margin:0; color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; } h1 { margin:3px 0 0; font-size:20px; font-weight:640; }.primary-nav { position:absolute; z-index:1; top:62px; left:clamp(14px, 4vw, 36px); display:flex; gap:3px; padding:3px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--surface); }.primary-nav button { border:0; border-radius:3px; padding:5px 9px; color:var(--muted); background:transparent; font-size:12px; }.primary-nav button.active { color:var(--text); background:var(--surface-hover); }.status { gap:7px; margin:0; color:var(--muted); font-size:12px; }.status-dot { width:7px; height:7px; border-radius:50%; background:var(--success); }.status-dot.offline { background:var(--warning, #e0ad65); }.page-alert { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; padding:10px 11px; color:#f2d5a1; background:rgba(224,173,101,.09); border-left:2px solid #e0ad65; font-size:12px; }.page-alert p { margin:0; line-height:1.5; }.page-alert button { flex:none; border:1px solid rgba(224,173,101,.45); border-radius:var(--radius-sm); padding:5px 8px; color:#f2d5a1; background:transparent; font-size:11px; } @media (max-width:620px) { main { padding-inline:14px; }.topbar { align-items:flex-start; }.shell-actions { align-items:flex-end; flex-direction:column-reverse; gap:8px; }.page-alert { align-items:flex-start; flex-direction:column; } } @media (max-width:360px) { .topbar { gap:8px; }.status { font-size:11px; }.primary-nav button { padding-inline:7px; } }
+  .scene-host.active {
+    display: contents;
+  }
 </style>

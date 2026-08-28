@@ -89,7 +89,10 @@ struct AppState {
     scheduled_reminder_retry_at_unix_ms: AtomicI64,
     pomodoro_wake_generation: AtomicU64,
     pomodoro_operation_lock: Mutex<()>,
+    immersive_restore_state: Mutex<Option<ImmersiveRestoreState>>,
     pending_floating_intent: Mutex<Option<FloatingIntent>>,
+    floating_window_preferences_lock: Mutex<()>,
+    floating_window_runtime: Mutex<FloatingWindowRuntime>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,24 +212,136 @@ struct ReconcileReport {
     warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WindowLayout {
+    Adaptive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowBounds {
+    x: Option<i32>,
+    y: Option<i32>,
+    width: u32,
+    height: u32,
+}
+
+impl WindowBounds {
+    fn from_physical(
+        position: Option<tauri::PhysicalPosition<i32>>,
+        size: tauri::PhysicalSize<u32>,
+        scale_factor: f64,
+    ) -> Self {
+        let scale = if scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
+        Self {
+            x: position.map(|value| (value.x as f64 / scale).round() as i32),
+            y: position.map(|value| (value.y as f64 / scale).round() as i32),
+            width: (size.width as f64 / scale).round() as u32,
+            height: (size.height as f64 / scale).round() as u32,
+        }
+    }
+}
+
+impl Default for WindowBounds {
+    fn default() -> Self {
+        Self {
+            x: None,
+            y: None,
+            width: 960,
+            height: 680,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowPreferences {
+    layout: WindowLayout,
+    maximized: bool,
+    normal_bounds: WindowBounds,
+    always_on_top: bool,
+    last_immersive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImmersiveRestoreState {
+    maximized: bool,
+    normal_bounds: WindowBounds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowRestoreTarget {
+    Maximized,
+    Normal(WindowBounds),
+}
+
+fn select_immersive_restore_bounds(
+    maximized: bool,
+    fullscreen: bool,
+    persisted: &WindowBounds,
+    current: Option<WindowBounds>,
+) -> WindowBounds {
+    if !maximized && !fullscreen {
+        current.unwrap_or_else(|| persisted.clone())
+    } else {
+        persisted.clone()
+    }
+}
+
+impl ImmersiveRestoreState {
+    fn restore_target(&self) -> WindowRestoreTarget {
+        if self.maximized {
+            WindowRestoreTarget::Maximized
+        } else {
+            WindowRestoreTarget::Normal(self.normal_bounds.clone())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowState {
+    maximized: bool,
+    fullscreen: bool,
+    normal_bounds: WindowBounds,
+}
+
+impl Default for WindowPreferences {
+    fn default() -> Self {
+        Self {
+            layout: WindowLayout::Adaptive,
+            maximized: true,
+            normal_bounds: WindowBounds::default(),
+            always_on_top: false,
+            last_immersive: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyWindowPreferences {
     mode: String,
     width: u32,
     height: u32,
     always_on_top: bool,
 }
 
-impl Default for WindowPreferences {
-    fn default() -> Self {
-        Self {
-            mode: "full".to_string(),
-            width: 800,
-            height: 600,
-            always_on_top: false,
-        }
-    }
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StoredWindowPreferences {
+    Current(WindowPreferences),
+    Legacy(LegacyWindowPreferences),
+}
+
+struct DecodedWindowPreferences {
+    preferences: WindowPreferences,
+    migrated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -234,6 +349,24 @@ impl Default for WindowPreferences {
 struct FloatingIntent {
     view: String,
     task_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum FloatingDisplayMode {
+    Capsule,
+    Expanded,
+}
+
+fn default_floating_display_mode() -> FloatingDisplayMode {
+    FloatingDisplayMode::Expanded
+}
+
+fn floating_display_size(mode: FloatingDisplayMode) -> (f64, f64) {
+    match mode {
+        FloatingDisplayMode::Capsule => (340.0, 64.0),
+        FloatingDisplayMode::Expanded => (360.0, 260.0),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +378,10 @@ struct FloatingWindowPreferences {
     width: f64,
     height: f64,
     always_on_top: bool,
+    #[serde(default)]
+    user_resized: bool,
+    #[serde(default = "default_floating_display_mode")]
+    display_mode: FloatingDisplayMode,
 }
 
 impl Default for FloatingWindowPreferences {
@@ -253,11 +390,71 @@ impl Default for FloatingWindowPreferences {
             visible: false,
             x: None,
             y: None,
-            width: 340.0,
-            height: 180.0,
+            width: 360.0,
+            height: 260.0,
             always_on_top: true,
+            user_resized: false,
+            display_mode: FloatingDisplayMode::Expanded,
         }
     }
+}
+
+#[derive(Debug, Default)]
+struct FloatingWindowRuntime {
+    programmatic_target: Option<(u32, u32)>,
+    programmatic_until_unix_ms: u128,
+    programmatic_generation: u64,
+}
+
+fn install_programmatic_resize_target(
+    runtime: &mut FloatingWindowRuntime,
+    target: (u32, u32),
+    deadline: u128,
+) -> u64 {
+    runtime.programmatic_generation = runtime.programmatic_generation.wrapping_add(1);
+    runtime.programmatic_target = Some(target);
+    runtime.programmatic_until_unix_ms = deadline;
+    runtime.programmatic_generation
+}
+
+fn clear_failed_programmatic_resize(
+    runtime: &mut FloatingWindowRuntime,
+    target: (u32, u32),
+    deadline: u128,
+    generation: u64,
+) {
+    if runtime.programmatic_target == Some(target)
+        && runtime.programmatic_until_unix_ms == deadline
+        && runtime.programmatic_generation == generation
+    {
+        runtime.programmatic_target = None;
+        runtime.programmatic_until_unix_ms = 0;
+    }
+}
+
+fn classify_floating_resize(
+    runtime: &mut FloatingWindowRuntime,
+    actual: (u32, u32),
+    now_unix_ms: u128,
+) -> bool {
+    let Some(target) = runtime.programmatic_target else {
+        return true;
+    };
+    if now_unix_ms <= runtime.programmatic_until_unix_ms {
+        if actual == target {
+            runtime.programmatic_target = None;
+            runtime.programmatic_until_unix_ms = 0;
+        }
+        false
+    } else {
+        runtime.programmatic_target = None;
+        runtime.programmatic_until_unix_ms = 0;
+        true
+    }
+}
+
+fn floating_focus_event(focused: bool) -> Option<&'static str> {
+    (!focused).then_some("floating-window-focus-lost")
 }
 
 fn string_error(error: impl std::fmt::Display) -> String {
@@ -1227,16 +1424,54 @@ fn window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn validate_window_preferences(preferences: &WindowPreferences) -> Result<(), String> {
-    if !matches!(preferences.mode.as_str(), "full" | "compact") {
-        return Err("window mode must be full or compact".to_string());
+    if !(520..=7_680).contains(&preferences.normal_bounds.width) {
+        return Err("window width must be between 520 and 7680".to_string());
     }
-    if !(260..=2_000).contains(&preferences.width) {
-        return Err("window width must be between 260 and 2000".to_string());
+    if !(420..=4_320).contains(&preferences.normal_bounds.height) {
+        return Err("window height must be between 420 and 4320".to_string());
     }
-    if !(180..=1_600).contains(&preferences.height) {
-        return Err("window height must be between 180 and 1600".to_string());
+    for coordinate in [preferences.normal_bounds.x, preferences.normal_bounds.y]
+        .into_iter()
+        .flatten()
+    {
+        if !(-32_768..=32_767).contains(&coordinate) {
+            return Err("window coordinates must be between -32768 and 32767".to_string());
+        }
     }
     Ok(())
+}
+
+fn decode_window_preferences(content: &str) -> Result<DecodedWindowPreferences, String> {
+    match serde_json::from_str::<StoredWindowPreferences>(content).map_err(string_error)? {
+        StoredWindowPreferences::Current(preferences) => {
+            validate_window_preferences(&preferences)?;
+            Ok(DecodedWindowPreferences {
+                preferences,
+                migrated: false,
+            })
+        }
+        StoredWindowPreferences::Legacy(legacy) => {
+            let maximized = match legacy.mode.as_str() {
+                "full" => true,
+                "compact" => false,
+                _ => return Err("unknown legacy window mode".to_string()),
+            };
+            let preferences = WindowPreferences {
+                maximized,
+                normal_bounds: WindowBounds {
+                    width: legacy.width.clamp(520, 7_680),
+                    height: legacy.height.clamp(420, 4_320),
+                    ..WindowBounds::default()
+                },
+                always_on_top: legacy.always_on_top,
+                ..WindowPreferences::default()
+            };
+            Ok(DecodedWindowPreferences {
+                preferences,
+                migrated: true,
+            })
+        }
+    }
 }
 
 fn read_window_preferences(app: &AppHandle) -> WindowPreferences {
@@ -1246,10 +1481,15 @@ fn read_window_preferences(app: &AppHandle) -> WindowPreferences {
     let Ok(content) = fs::read_to_string(path) else {
         return WindowPreferences::default();
     };
-    serde_json::from_str::<WindowPreferences>(&content)
-        .ok()
-        .filter(|preferences| validate_window_preferences(preferences).is_ok())
-        .unwrap_or_default()
+    let Ok(decoded) = decode_window_preferences(&content) else {
+        return WindowPreferences::default();
+    };
+    if decoded.migrated {
+        if let Err(error) = save_window_preferences_to_disk(app, &decoded.preferences) {
+            eprintln!("window preferences migration write failed: {error}");
+        }
+    }
+    decoded.preferences
 }
 
 fn save_window_preferences_to_disk(
@@ -1265,20 +1505,70 @@ fn save_window_preferences_to_disk(
     fs::write(path, content).map_err(string_error)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainWindowPlacementStep {
+    Unmaximize,
+    SetNormalSize,
+    SetNormalPosition,
+    Maximize,
+    LeaveNormal,
+}
+
+fn main_window_placement_plan(maximized: bool) -> [MainWindowPlacementStep; 4] {
+    [
+        MainWindowPlacementStep::Unmaximize,
+        MainWindowPlacementStep::SetNormalSize,
+        MainWindowPlacementStep::SetNormalPosition,
+        if maximized {
+            MainWindowPlacementStep::Maximize
+        } else {
+            MainWindowPlacementStep::LeaveNormal
+        },
+    ]
+}
+
 fn apply_window_preferences(
     window: &WebviewWindow,
     preferences: &WindowPreferences,
 ) -> Result<(), String> {
     validate_window_preferences(preferences)?;
     window
-        .set_size(LogicalSize::new(preferences.width, preferences.height))
+        .set_min_size(Some(LogicalSize::new(520.0, 420.0)))
         .map_err(string_error)?;
-    window
-        .set_resizable(preferences.mode == "full")
-        .map_err(string_error)?;
+    window.set_resizable(true).map_err(string_error)?;
     window
         .set_always_on_top(preferences.always_on_top)
-        .map_err(string_error)
+        .map_err(string_error)?;
+    window.set_fullscreen(false).map_err(string_error)?;
+    for step in main_window_placement_plan(preferences.maximized) {
+        match step {
+            MainWindowPlacementStep::Unmaximize => {
+                window.unmaximize().map_err(string_error)?;
+            }
+            MainWindowPlacementStep::SetNormalSize => {
+                window
+                    .set_size(LogicalSize::new(
+                        preferences.normal_bounds.width,
+                        preferences.normal_bounds.height,
+                    ))
+                    .map_err(string_error)?;
+            }
+            MainWindowPlacementStep::SetNormalPosition => {
+                if let (Some(x), Some(y)) =
+                    (preferences.normal_bounds.x, preferences.normal_bounds.y)
+                {
+                    window
+                        .set_position(LogicalPosition::new(x as f64, y as f64))
+                        .map_err(string_error)?;
+                }
+            }
+            MainWindowPlacementStep::Maximize => {
+                window.maximize().map_err(string_error)?;
+            }
+            MainWindowPlacementStep::LeaveNormal => {}
+        }
+    }
+    Ok(())
 }
 
 fn floating_window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1288,14 +1578,19 @@ fn floating_window_preferences_path(app: &AppHandle) -> Result<PathBuf, String> 
         .map_err(string_error)
 }
 
+fn floating_window_size_bounds() -> ((f64, f64), (f64, f64)) {
+    ((260.0, 56.0), (800.0, 800.0))
+}
+
 fn validate_floating_window_preferences(
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
-    if !(260.0..=800.0).contains(&preferences.width) {
+    let ((min_width, min_height), (max_width, max_height)) = floating_window_size_bounds();
+    if !(min_width..=max_width).contains(&preferences.width) {
         return Err("floating window width must be between 260 and 800".to_string());
     }
-    if !(120.0..=800.0).contains(&preferences.height) {
-        return Err("floating window height must be between 120 and 800".to_string());
+    if !(min_height..=max_height).contains(&preferences.height) {
+        return Err("floating window height must be between 56 and 800".to_string());
     }
     for coordinate in [preferences.x, preferences.y].into_iter().flatten() {
         if !(-10_000..=10_000).contains(&coordinate) {
@@ -1305,7 +1600,7 @@ fn validate_floating_window_preferences(
     Ok(())
 }
 
-fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreferences {
+fn read_floating_window_preferences_from_disk(app: &AppHandle) -> FloatingWindowPreferences {
     let Ok(path) = floating_window_preferences_path(app) else {
         return FloatingWindowPreferences::default();
     };
@@ -1318,7 +1613,7 @@ fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreference
         .unwrap_or_default()
 }
 
-fn save_floating_window_preferences_to_disk(
+fn save_floating_window_preferences_to_disk_unlocked(
     app: &AppHandle,
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
@@ -1331,6 +1626,30 @@ fn save_floating_window_preferences_to_disk(
     fs::write(path, content).map_err(string_error)
 }
 
+fn read_floating_window_preferences(app: &AppHandle) -> FloatingWindowPreferences {
+    let state = app.state::<AppState>();
+    let _guard = state
+        .floating_window_preferences_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    read_floating_window_preferences_from_disk(app)
+}
+
+fn update_floating_window_preferences(
+    app: &AppHandle,
+    update: impl FnOnce(&mut FloatingWindowPreferences),
+) -> Result<FloatingWindowPreferences, String> {
+    let state = app.state::<AppState>();
+    let _guard = state
+        .floating_window_preferences_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut preferences = read_floating_window_preferences_from_disk(app);
+    update(&mut preferences);
+    save_floating_window_preferences_to_disk_unlocked(app, &preferences)?;
+    Ok(preferences)
+}
+
 fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
     let window_for_events = window.clone();
     let app_for_events = app.clone();
@@ -1338,31 +1657,82 @@ fn install_floating_window_tracking(app: &AppHandle, window: &WebviewWindow) {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = window_for_events.hide();
-            let mut preferences = read_floating_window_preferences(&app_for_events);
-            preferences.visible = false;
-            let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
+            let _ = update_floating_window_preferences(&app_for_events, |preferences| {
+                preferences.visible = false;
+            });
             return;
         }
 
-        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
-            return;
-        }
-
-        let mut preferences = read_floating_window_preferences(&app_for_events);
-        if let Ok(scale_factor) = window_for_events.scale_factor() {
-            if let Ok(position) = window_for_events.outer_position() {
+        match event {
+            WindowEvent::Focused(focused) => {
+                if let Some(event_name) = floating_focus_event(*focused) {
+                    let _ = app_for_events.emit(event_name, ());
+                }
+            }
+            WindowEvent::Moved(position) => {
+                let Ok(scale_factor) = window_for_events.scale_factor() else {
+                    return;
+                };
                 let logical: LogicalPosition<f64> = position.to_logical(scale_factor);
-                preferences.x = Some(logical.x.round() as i32);
-                preferences.y = Some(logical.y.round() as i32);
+                let _ = update_floating_window_preferences(&app_for_events, |preferences| {
+                    preferences.x = Some(logical.x.round() as i32);
+                    preferences.y = Some(logical.y.round() as i32);
+                });
             }
-            if let Ok(size) = window_for_events.inner_size() {
+            WindowEvent::Resized(size) => {
+                let Ok(scale_factor) = window_for_events.scale_factor() else {
+                    return;
+                };
                 let logical: LogicalSize<f64> = size.to_logical(scale_factor);
-                preferences.width = logical.width.round();
-                preferences.height = logical.height.round();
+                let actual = (logical.width.round() as u32, logical.height.round() as u32);
+                let user_resized = {
+                    let state = app_for_events.state::<AppState>();
+                    let Ok(mut runtime) = state.floating_window_runtime.lock() else {
+                        return;
+                    };
+                    classify_floating_resize(&mut runtime, actual, now_unix_ms())
+                };
+                if let Ok(preferences) =
+                    update_floating_window_preferences(&app_for_events, |preferences| {
+                        preferences.width = f64::from(actual.0);
+                        preferences.height = f64::from(actual.1);
+                        if user_resized {
+                            preferences.user_resized = true;
+                        }
+                    })
+                {
+                    if user_resized {
+                        let _ =
+                            app_for_events.emit("floating-window-preferences-changed", preferences);
+                    }
+                }
             }
+            _ => {}
         }
-        let _ = save_floating_window_preferences_to_disk(&app_for_events, &preferences);
     });
+}
+
+fn set_floating_window_size(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let target = (width.round() as u32, height.round() as u32);
+    let deadline = now_unix_ms() + 1_500;
+    let generation = {
+        let state = app.state::<AppState>();
+        let mut runtime = state.floating_window_runtime.lock().map_err(string_error)?;
+        install_programmatic_resize_target(&mut runtime, target, deadline)
+    };
+
+    if let Err(error) = window.set_size(LogicalSize::new(width, height)) {
+        let state = app.state::<AppState>();
+        let mut runtime = state.floating_window_runtime.lock().map_err(string_error)?;
+        clear_failed_programmatic_resize(&mut runtime, target, deadline, generation);
+        return Err(string_error(error));
+    }
+    Ok(())
 }
 
 fn show_floating_window_internal(app: &AppHandle) -> Result<(), String> {
@@ -1373,9 +1743,10 @@ fn show_floating_window_internal(app: &AppHandle) -> Result<(), String> {
             .map_err(string_error)?;
         window.show().map_err(string_error)?;
         window.set_focus().map_err(string_error)?;
-        let mut updated = preferences;
-        updated.visible = true;
-        return save_floating_window_preferences_to_disk(app, &updated);
+        update_floating_window_preferences(app, |preferences| {
+            preferences.visible = true;
+        })?;
+        return Ok(());
     }
 
     let app_for_thread = app.clone();
@@ -1392,6 +1763,7 @@ fn create_floating_window(
     app: &AppHandle,
     preferences: &FloatingWindowPreferences,
 ) -> Result<(), String> {
+    let ((min_width, min_height), (max_width, max_height)) = floating_window_size_bounds();
     let window = WebviewWindowBuilder::new(
         app,
         FLOATING_WINDOW_LABEL,
@@ -1399,6 +1771,8 @@ fn create_floating_window(
     )
     .title("StarToDo 悬浮窗")
     .inner_size(preferences.width, preferences.height)
+    .min_inner_size(min_width, min_height)
+    .max_inner_size(max_width, max_height)
     .decorations(false)
     .always_on_top(preferences.always_on_top)
     .skip_taskbar(true)
@@ -1414,9 +1788,9 @@ fn create_floating_window(
     }
     install_floating_window_tracking(app, &window);
 
-    let mut updated = preferences.clone();
-    updated.visible = true;
-    save_floating_window_preferences_to_disk(app, &updated)?;
+    update_floating_window_preferences(app, |preferences| {
+        preferences.visible = true;
+    })?;
     window.show().map_err(string_error)?;
     window.set_focus().map_err(string_error)
 }
@@ -1425,9 +1799,10 @@ fn hide_floating_window_internal(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
         window.hide().map_err(string_error)?;
     }
-    let mut preferences = read_floating_window_preferences(app);
-    preferences.visible = false;
-    save_floating_window_preferences_to_disk(app, &preferences)
+    update_floating_window_preferences(app, |preferences| {
+        preferences.visible = false;
+    })?;
+    Ok(())
 }
 
 fn toggle_floating_window_internal(app: &AppHandle) -> Result<(), String> {
@@ -1442,23 +1817,38 @@ fn toggle_floating_window_internal(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn set_window_mode_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
-    if !matches!(mode, "full" | "compact") {
-        return Err("window mode must be full or compact".to_string());
-    }
-    let mut preferences = read_window_preferences(app);
-    preferences.mode = mode.to_string();
-    if mode == "full" {
-        preferences.width = 800;
-        preferences.height = 600;
-    } else {
-        preferences.width = 380;
-        preferences.height = 520;
-    }
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        apply_window_preferences(&window, &preferences)?;
-    }
-    save_window_preferences_to_disk(app, &preferences)
+fn install_main_window_tracking(app: &AppHandle, window: &WebviewWindow) {
+    let window_for_events = window.clone();
+    let app_for_events = app.clone();
+    window.on_window_event(move |event| {
+        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+            return;
+        }
+        let fullscreen = window_for_events.is_fullscreen().unwrap_or(false);
+        let mut preferences = read_window_preferences(&app_for_events);
+        if fullscreen {
+            preferences.last_immersive = true;
+            let _ = save_window_preferences_to_disk(&app_for_events, &preferences);
+            return;
+        }
+        preferences.last_immersive = false;
+        preferences.maximized = window_for_events.is_maximized().unwrap_or(false);
+        if !preferences.maximized {
+            if let Ok(scale) = window_for_events.scale_factor() {
+                if let Ok(position) = window_for_events.outer_position() {
+                    let p: LogicalPosition<f64> = position.to_logical(scale);
+                    preferences.normal_bounds.x = Some(p.x.round() as i32);
+                    preferences.normal_bounds.y = Some(p.y.round() as i32);
+                }
+                if let Ok(size) = window_for_events.inner_size() {
+                    let s: LogicalSize<f64> = size.to_logical(scale);
+                    preferences.normal_bounds.width = s.width.round() as u32;
+                    preferences.normal_bounds.height = s.height.round() as u32;
+                }
+            }
+        }
+        let _ = save_window_preferences_to_disk(&app_for_events, &preferences);
+    });
 }
 
 fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
@@ -1474,7 +1864,6 @@ fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
             .map_err(string_error)?
             .build()
             .map_err(string_error)?;
-        apply_window_preferences(&window, &preferences)?;
         install_close_to_tray_behavior(&window);
     }
 
@@ -1482,6 +1871,7 @@ fn build_main_window_from_config(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window was not created".to_string())?;
     apply_window_preferences(&window, &preferences)?;
+    install_main_window_tracking(app, &window);
     show_existing_window(&window)
 }
 
@@ -2909,35 +3299,121 @@ fn save_window_preferences(app: AppHandle, preferences: WindowPreferences) -> Re
     save_window_preferences_to_disk(&app, &preferences)
 }
 
-#[tauri::command]
-fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
-    match mode.as_str() {
-        "full" | "compact" => set_window_mode_internal(&app, &mode),
-        "normal" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .unmaximize()
-            .map_err(string_error),
-        "minimized" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .minimize()
-            .map_err(string_error),
-        "maximized" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .maximize()
-            .map_err(string_error),
-        "fullscreen" => app
-            .get_webview_window(MAIN_WINDOW_LABEL)
-            .ok_or_else(|| "main window is not available".to_string())?
-            .set_fullscreen(true)
-            .map_err(string_error),
-        _ => Err(
-            "window mode must be full, compact, normal, minimized, maximized, or fullscreen"
-                .to_string(),
-        ),
+fn current_window_state(app: &AppHandle) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    let maximized = window.is_maximized().map_err(string_error)?;
+    let fullscreen = window.is_fullscreen().map_err(string_error)?;
+    let mut preferences = read_window_preferences(app);
+    if !maximized && !fullscreen {
+        if let Ok(size) = window.inner_size() {
+            let position = window.outer_position().ok();
+            let scale_factor = window.scale_factor().unwrap_or(1.0);
+            preferences.normal_bounds = WindowBounds::from_physical(position, size, scale_factor);
+        }
     }
+    Ok(WindowState {
+        maximized,
+        fullscreen,
+        normal_bounds: preferences.normal_bounds,
+    })
+}
+
+#[tauri::command]
+fn get_window_state(app: AppHandle) -> Result<WindowState, String> {
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn enter_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    let preferences = read_window_preferences(&app);
+    let maximized = window.is_maximized().map_err(string_error)?;
+    let fullscreen = window.is_fullscreen().map_err(string_error)?;
+    if fullscreen {
+        return current_window_state(&app);
+    }
+    let current_bounds = if !maximized && !fullscreen {
+        let size = window.inner_size().map_err(string_error)?;
+        let position = window.outer_position().map_err(string_error).ok();
+        let scale_factor = window.scale_factor().map_err(string_error)?;
+        Some(WindowBounds::from_physical(position, size, scale_factor))
+    } else {
+        None
+    };
+    let normal_bounds = select_immersive_restore_bounds(
+        maximized,
+        fullscreen,
+        &preferences.normal_bounds,
+        current_bounds,
+    );
+    let restore = ImmersiveRestoreState {
+        maximized,
+        normal_bounds,
+    };
+    window.set_fullscreen(true).map_err(string_error)?;
+    *state.immersive_restore_state.lock().map_err(string_error)? = Some(restore);
+    let mut updated = preferences;
+    updated.last_immersive = true;
+    save_window_preferences_to_disk(&app, &updated)?;
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn exit_immersive_mode(app: AppHandle, state: State<'_, AppState>) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window.set_fullscreen(false).map_err(string_error)?;
+    let mut preferences = read_window_preferences(&app);
+    let restore = state
+        .immersive_restore_state
+        .lock()
+        .map_err(string_error)?
+        .take()
+        .unwrap_or(ImmersiveRestoreState {
+            maximized: preferences.maximized,
+            normal_bounds: preferences.normal_bounds.clone(),
+        });
+    match restore.restore_target() {
+        WindowRestoreTarget::Maximized => window.maximize().map_err(string_error)?,
+        WindowRestoreTarget::Normal(bounds) => {
+            window.unmaximize().map_err(string_error)?;
+            window
+                .set_size(LogicalSize::new(bounds.width, bounds.height))
+                .map_err(string_error)?;
+            if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
+                window
+                    .set_position(LogicalPosition::new(x, y))
+                    .map_err(string_error)?;
+            }
+            preferences.normal_bounds = bounds;
+        }
+    }
+    preferences.maximized = restore.maximized;
+    preferences.last_immersive = false;
+    save_window_preferences_to_disk(&app, &preferences)?;
+    current_window_state(&app)
+}
+
+#[tauri::command]
+fn set_main_window_maximized(app: AppHandle, maximized: bool) -> Result<WindowState, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window is not available".to_string())?;
+    if maximized {
+        window.maximize().map_err(string_error)?;
+    } else {
+        window.unmaximize().map_err(string_error)?;
+    }
+    let mut preferences = read_window_preferences(&app);
+    preferences.maximized = maximized;
+    preferences.last_immersive = false;
+    save_window_preferences_to_disk(&app, &preferences)?;
+    current_window_state(&app)
 }
 
 #[tauri::command]
@@ -2956,6 +3432,41 @@ fn set_always_on_top(app: AppHandle, always_on_top: bool) -> Result<(), String> 
 #[tauri::command]
 fn get_floating_window_preferences(app: AppHandle) -> FloatingWindowPreferences {
     read_floating_window_preferences(&app)
+}
+
+#[tauri::command]
+fn set_floating_display_mode(
+    app: AppHandle,
+    mode: FloatingDisplayMode,
+) -> Result<FloatingWindowPreferences, String> {
+    let preferences = update_floating_window_preferences(&app, |preferences| {
+        preferences.display_mode = mode;
+        if !preferences.user_resized {
+            let (width, height) = floating_display_size(mode);
+            preferences.width = width;
+            preferences.height = height;
+        }
+    })?;
+    if !preferences.user_resized {
+        if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+            set_floating_window_size(&app, &window, preferences.width, preferences.height)?;
+        }
+    }
+    Ok(preferences)
+}
+
+#[tauri::command]
+fn reset_floating_auto_size(app: AppHandle) -> Result<FloatingWindowPreferences, String> {
+    let preferences = update_floating_window_preferences(&app, |preferences| {
+        preferences.user_resized = false;
+        let (width, height) = floating_display_size(preferences.display_mode);
+        preferences.width = width;
+        preferences.height = height;
+    })?;
+    if let Some(window) = app.get_webview_window(FLOATING_WINDOW_LABEL) {
+        set_floating_window_size(&app, &window, preferences.width, preferences.height)?;
+    }
+    Ok(preferences)
 }
 
 #[tauri::command]
@@ -3018,15 +3529,12 @@ fn take_pending_floating_intent(
 
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let compact = MenuItem::with_id(app, "compact", "Compact mode", true, None::<&str>)?;
+    let focus = MenuItem::with_id(app, "focus", "Focus", true, None::<&str>)?;
     let floating = MenuItem::with_id(app, "floating", "悬浮窗", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let release_ui = MenuItem::with_id(app, "release_ui", "Release UI", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[&show, &compact, &floating, &hide, &release_ui, &quit],
-    )?;
+    let menu = Menu::with_items(app, &[&show, &focus, &floating, &hide, &release_ui, &quit])?;
 
     TrayIconBuilder::with_id("main-tray")
         .icon(
@@ -3038,9 +3546,16 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_or_create_main_window(app),
-            "compact" => {
-                let _ = set_window_mode_internal(app, "compact");
+            "focus" => {
+                let state = app.state::<AppState>();
+                if let Ok(mut pending) = state.pending_floating_intent.lock() {
+                    *pending = Some(FloatingIntent {
+                        view: "focus".to_string(),
+                        task_id: None,
+                    });
+                }
                 show_or_create_main_window(app);
+                let _ = app.emit("floating-intent-available", ());
             }
             "floating" => {
                 let _ = toggle_floating_window_internal(app);
@@ -3069,6 +3584,10 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+fn should_prevent_exit(code: Option<i32>) -> bool {
+    code.is_none()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3102,7 +3621,10 @@ pub fn run() {
                 scheduled_reminder_retry_at_unix_ms: AtomicI64::new(0),
                 pomodoro_wake_generation: AtomicU64::new(0),
                 pomodoro_operation_lock: Mutex::new(()),
+                immersive_restore_state: Mutex::new(None),
                 pending_floating_intent: Mutex::new(None),
+                floating_window_preferences_lock: Mutex::new(()),
+                floating_window_runtime: Mutex::new(FloatingWindowRuntime::default()),
             });
             install_activation_listener(app);
             queue_current_activation(app);
@@ -3112,6 +3634,7 @@ pub fn run() {
                 let preferences = read_window_preferences(app.handle());
                 apply_window_preferences(&window, &preferences).map_err(std::io::Error::other)?;
                 install_close_to_tray_behavior(&window);
+                install_main_window_tracking(app.handle(), &window);
                 show_existing_window(&window).map_err(std::io::Error::other)?;
             }
 
@@ -3172,9 +3695,14 @@ pub fn run() {
             cancel_test_notification,
             hide_to_tray,
             release_ui,
-            set_window_mode,
+            get_window_state,
+            enter_immersive_mode,
+            exit_immersive_mode,
+            set_main_window_maximized,
             set_always_on_top,
             get_floating_window_preferences,
+            set_floating_display_mode,
+            reset_floating_auto_size,
             show_floating_window,
             hide_floating_window,
             toggle_floating_window,
@@ -3191,13 +3719,277 @@ pub fn run() {
             reset_pomodoro,
             list_pomodoro_task_summaries
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running StarToDo");
+        .build(tauri::generate_context!())
+        .expect("error while building StarToDo")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if should_prevent_exit(code) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn implicit_last_window_exit_is_prevented_but_explicit_exit_is_allowed() {
+        assert!(should_prevent_exit(None));
+        assert!(!should_prevent_exit(Some(0)));
+        assert!(!should_prevent_exit(Some(7)));
+    }
+
+    #[test]
+    fn maximized_startup_seeds_normal_placement_before_final_maximize() {
+        assert_eq!(
+            main_window_placement_plan(true),
+            [
+                MainWindowPlacementStep::Unmaximize,
+                MainWindowPlacementStep::SetNormalSize,
+                MainWindowPlacementStep::SetNormalPosition,
+                MainWindowPlacementStep::Maximize,
+            ]
+        );
+        assert_eq!(
+            main_window_placement_plan(false),
+            [
+                MainWindowPlacementStep::Unmaximize,
+                MainWindowPlacementStep::SetNormalSize,
+                MainWindowPlacementStep::SetNormalPosition,
+                MainWindowPlacementStep::LeaveNormal,
+            ]
+        );
+    }
+
+    #[test]
+    fn only_native_floating_deactivation_routes_focus_loss() {
+        assert_eq!(floating_focus_event(true), None);
+        assert_eq!(
+            floating_focus_event(false),
+            Some("floating-window-focus-lost")
+        );
+    }
+
+    #[test]
+    fn floating_display_modes_have_recommended_sizes() {
+        assert_eq!(
+            floating_display_size(FloatingDisplayMode::Capsule),
+            (340.0, 64.0)
+        );
+        assert_eq!(
+            floating_display_size(FloatingDisplayMode::Expanded),
+            (360.0, 260.0)
+        );
+    }
+
+    #[test]
+    fn floating_window_bounds_are_exact() {
+        assert_eq!(
+            floating_window_size_bounds(),
+            ((260.0, 56.0), (800.0, 800.0))
+        );
+    }
+
+    #[test]
+    fn legacy_floating_preferences_enable_auto_size() {
+        let preferences = serde_json::from_str::<FloatingWindowPreferences>(
+            r#"{"visible":true,"x":10,"y":20,"width":340,"height":180,"alwaysOnTop":true}"#,
+        )
+        .expect("legacy floating preferences should decode");
+
+        assert!(!preferences.user_resized);
+        assert_eq!(preferences.display_mode, FloatingDisplayMode::Expanded);
+    }
+
+    #[test]
+    fn matching_programmatic_resize_before_deadline_clears_target_without_marking_user() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(!classify_floating_resize(&mut runtime, (340, 64), 1_500));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn intermediate_programmatic_resize_before_deadline_retains_target() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(!classify_floating_resize(&mut runtime, (350, 100), 1_499));
+        assert_eq!(runtime.programmatic_target, Some((340, 64)));
+        assert_eq!(runtime.programmatic_until_unix_ms, 1_500);
+    }
+
+    #[test]
+    fn expired_programmatic_resize_clears_target_and_marks_user() {
+        let mut runtime = FloatingWindowRuntime {
+            programmatic_target: Some((340, 64)),
+            programmatic_until_unix_ms: 1_500,
+            ..FloatingWindowRuntime::default()
+        };
+
+        assert!(classify_floating_resize(&mut runtime, (340, 64), 1_501));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn resize_without_programmatic_target_marks_user() {
+        let mut runtime = FloatingWindowRuntime::default();
+
+        assert!(classify_floating_resize(&mut runtime, (360, 260), 1_000));
+        assert_eq!(runtime.programmatic_target, None);
+        assert_eq!(runtime.programmatic_until_unix_ms, 0);
+    }
+
+    #[test]
+    fn repeated_programmatic_resize_requests_receive_distinct_generations() {
+        let mut runtime = FloatingWindowRuntime::default();
+
+        let first = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+        let second = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+
+        assert_ne!(first, second);
+        assert_eq!(runtime.programmatic_generation, second);
+    }
+
+    #[test]
+    fn failed_older_resize_does_not_clear_newer_identical_target() {
+        let mut runtime = FloatingWindowRuntime::default();
+        let first = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+        let second = install_programmatic_resize_target(&mut runtime, (340, 64), 1_500);
+
+        clear_failed_programmatic_resize(&mut runtime, (340, 64), 1_500, first);
+
+        assert_eq!(runtime.programmatic_target, Some((340, 64)));
+        assert_eq!(runtime.programmatic_until_unix_ms, 1_500);
+        assert_eq!(runtime.programmatic_generation, second);
+    }
+
+    #[test]
+    fn immersive_restore_bounds_prefer_current_only_when_window_is_normal() {
+        let persisted = WindowBounds {
+            x: Some(1),
+            y: Some(2),
+            width: 500,
+            height: 400,
+        };
+        let current = WindowBounds {
+            x: Some(30),
+            y: Some(40),
+            width: 900,
+            height: 700,
+        };
+        assert_eq!(
+            select_immersive_restore_bounds(false, false, &persisted, Some(current.clone())),
+            current
+        );
+        assert_eq!(
+            select_immersive_restore_bounds(true, false, &persisted, Some(current.clone())),
+            persisted
+        );
+        assert_eq!(
+            select_immersive_restore_bounds(false, true, &persisted, Some(current)),
+            persisted
+        );
+    }
+
+    #[test]
+    fn physical_window_bounds_convert_to_logical_coordinates() {
+        let bounds = WindowBounds::from_physical(
+            Some(tauri::PhysicalPosition::new(60, 80)),
+            tauri::PhysicalSize::new(1800, 1400),
+            2.0,
+        );
+        assert_eq!(
+            bounds,
+            WindowBounds {
+                x: Some(30),
+                y: Some(40),
+                width: 900,
+                height: 700
+            }
+        );
+    }
+
+    #[test]
+    fn immersive_restore_prefers_maximized() {
+        let restore = ImmersiveRestoreState {
+            maximized: true,
+            normal_bounds: WindowBounds::default(),
+        };
+        assert_eq!(restore.restore_target(), WindowRestoreTarget::Maximized);
+    }
+
+    #[test]
+    fn immersive_restore_uses_normal_bounds() {
+        let bounds = WindowBounds {
+            x: Some(30),
+            y: Some(40),
+            width: 900,
+            height: 700,
+        };
+        let restore = ImmersiveRestoreState {
+            maximized: false,
+            normal_bounds: bounds.clone(),
+        };
+        assert_eq!(
+            restore.restore_target(),
+            WindowRestoreTarget::Normal(bounds)
+        );
+    }
+
+    #[test]
+    fn compact_window_preferences_migrate_to_adaptive() {
+        let decoded = decode_window_preferences(
+            r#"{"mode":"compact","width":380,"height":520,"alwaysOnTop":true}"#,
+        )
+        .unwrap();
+        assert!(decoded.migrated);
+        assert_eq!(decoded.preferences.layout, WindowLayout::Adaptive);
+        assert!(!decoded.preferences.maximized);
+        assert_eq!(decoded.preferences.normal_bounds.width, 520);
+        assert_eq!(decoded.preferences.normal_bounds.height, 520);
+        assert!(decoded.preferences.always_on_top);
+    }
+
+    #[test]
+    fn full_window_preferences_migrate_to_maximized_adaptive() {
+        let decoded = decode_window_preferences(
+            r#"{"mode":"full","width":800,"height":600,"alwaysOnTop":false}"#,
+        )
+        .unwrap();
+        assert!(decoded.migrated);
+        assert_eq!(decoded.preferences.layout, WindowLayout::Adaptive);
+        assert!(decoded.preferences.maximized);
+        assert_eq!(decoded.preferences.normal_bounds.width, 800);
+        assert_eq!(decoded.preferences.normal_bounds.height, 600);
+    }
+
+    #[test]
+    fn adaptive_window_preferences_reject_too_small_bounds() {
+        let preferences = WindowPreferences {
+            normal_bounds: WindowBounds {
+                width: 519,
+                height: 420,
+                ..WindowBounds::default()
+            },
+            ..WindowPreferences::default()
+        };
+        assert_eq!(
+            validate_window_preferences(&preferences).unwrap_err(),
+            "window width must be between 520 and 7680"
+        );
+    }
 
     #[test]
     fn migrations_are_idempotent() {

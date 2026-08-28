@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: dark;
   --canvas: #111214;
   --surface: #181a1e;
@@ -23,6 +23,12 @@
 }
 
 * { box-sizing: border-box; }
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
 html { min-width: 320px; background: var(--canvas); }
 body {
   min-width: 320px;
@@ -39,6 +45,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   outline: 2px solid var(--info);
   outline-offset: 2px;
 }
+body > div { height: 100%; }
+.app-shell { width:100%; height:100dvh; min-height:0; overflow:hidden; display:grid; grid-template-columns:auto minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+.app-header { grid-column:1 / -1; min-width:0; }
+.scene-navigation { min-height:0; }
+.scene-canvas { min-width:0; min-height:0; overflow:hidden; }
+@media (max-width:759px) { .app-shell { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto; } .scene-navigation { grid-row:3; } }
+@media (max-height:559px) { .density-help { display:none !important; } }
 ::selection { color: var(--text); background: rgba(243, 107, 50, 0.42); }
 @media (max-width: 320px) { body { overflow-x: hidden; } }
 @media (prefers-reduced-motion: reduce) {

@@ -149,15 +149,6 @@ export interface FloatingIntent {
   taskId: number | null;
 }
 
-export interface FloatingWindowPreferences {
-  visible: boolean;
-  x: number | null;
-  y: number | null;
-  width: number;
-  height: number;
-  alwaysOnTop: boolean;
-}
-
 export interface TaskDraft {
   title: string;
   notes: string;
@@ -438,11 +429,6 @@ export const acknowledgeReminderWarnings = (listenerToken: number, ids: number[]
   invoke<void>('acknowledge_reminder_warnings', { listenerToken, ids });
 export const parseTaskDrafts = (text: string, todayLocal: string): Promise<TaskDraft[]> =>
   invoke<TaskDraft[]>('parse_task_drafts', { text, todayLocal });
-export const getFloatingWindowPreferences = (): Promise<FloatingWindowPreferences> =>
-  invoke<FloatingWindowPreferences>('get_floating_window_preferences');
-export const showFloatingWindow = (): Promise<void> => invoke<void>('show_floating_window');
-export const hideFloatingWindow = (): Promise<void> => invoke<void>('hide_floating_window');
-export const toggleFloatingWindow = (): Promise<void> => invoke<void>('toggle_floating_window');
 export const openTaskFromFloating = (taskId: number): Promise<void> =>
   invoke<void>('open_task_from_floating', { taskId });
 export const openFocusFromFloating = (): Promise<void> => invoke<void>('open_focus_from_floating');
